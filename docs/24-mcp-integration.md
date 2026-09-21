@@ -14,7 +14,7 @@
 | **Tool registry (`ToolDescriptor`)**         | ✅ Implemented | `src/core/agent-tools/tool-descriptor.ts`            |
 | **Tool invoker (auth → validate → service)** | ✅ Implemented | `src/core/agent-tools/tool-invoker.ts`               |
 | **Registry service**                         | ✅ Implemented | `src/core/agent-tools/tool-registry.service.ts`      |
-| **Curated tool tables (51 tools)**           | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
+| **Curated tool tables (52 tools)**           | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
 | **MCP transport adapter**                    | ✅ Implemented | `src/modules/mcp/mcp.server.ts`                      |
 | **Opt-in module gate**                       | ✅ Implemented | `src/modules/mcp/mcp.module.ts`, `src/app.module.ts` |
 | **Per-key rate limiter**                     | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |
@@ -124,7 +124,7 @@ OPERATOR like the QR endpoint).
 | Domain         | Read tools                                              | Write tools                                                                                   |
 | -------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | **Session**    | list, get, chats, stats, presence                       | mark read/unread, typing, subscribe presence                                                  |
-| **Message**    | list, history, reactions                                | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
+| **Message**    | list, history, download media, reactions                | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
 | **Contact**    | list, get, check-number, resolve-phone, profile-picture | block, unblock                                                                                |
 | **Group**      | list, get, invite-code (OPERATOR)                       | create, add participants, set subject, set description                                        |
 | **Webhook**    | list, get (read-only)                                   | —                                                                                             |

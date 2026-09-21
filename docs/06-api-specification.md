@@ -1428,7 +1428,8 @@ Remove a message's pin. Takes no duration.
 
 #### GET /api/sessions/:sessionId/messages/:chatId/:messageId/media
 
-Download a message's **stored** media bytes.
+Download a message's media bytes: the **stored** copy when the gateway holds one, else a **live
+download** of that one message from WhatsApp.
 
 The route serves the chat-media **archive** first, and falls back to the **inline base64 copy** on
 the message row when no archived file is servable. Archiving is **opt-in and off by default**
@@ -1447,6 +1448,15 @@ The inline fallback also keeps an inbound message's media downloadable after
 `CHAT_MEDIA_ARCHIVE_TTL_DAYS` retention purges the archived file, since retention leaves the inline
 copy in place.
 
+When neither stored copy exists the route **downloads the media live** (`whatsapp-web.js` only). That
+is what reaches an attachment the gateway never stored: one that arrived before the session was
+created, one whose download was disabled or over the cap at the time, or one that sits deeper than
+the 100-message window `GET /messages/:chatId/history?includeMedia=true` can download from. The
+message is looked up by id in the page store and, when it is not loaded there, by walking the chat
+back in widening windows (100, 500, then 2000 messages). The download runs through the same size
+pre-gate (`MEDIA_DOWNLOAD_MAX_BYTES`), concurrency limiter and timeout as inbound media. The live
+result is served, not stored.
+
 **Auth:** API key
 
 **Path parameters**
@@ -1463,11 +1473,12 @@ mimetype when it is in a conservative inert set (common image/video/audio types)
 `application/octet-stream` otherwise — a document, or an `image/svg+xml`, is never served as active
 content on the API origin.
 
-**Errors:** `401` missing/invalid API key, or key not scoped to this session · `404`
-`No media stored for this message` — the message carries no media, `MEDIA_DOWNLOAD_ENABLED=false`
-or the media was above `MEDIA_DOWNLOAD_MAX_BYTES` when it was stored (the row holds a size-only
-marker), it was a URL-based API send (the gateway fetches those bytes at send time and never stores
-them), or the message is not in this gateway's history (e.g. history backfill, which is media-free)
+**Errors:** `401` missing/invalid API key, or key not scoped to this session · `404` when there is
+no stored copy **and** the live download yields nothing: the message cannot be found in the chat
+(within the 2000-message walk), it carries no media, `MEDIA_DOWNLOAD_ENABLED=false`, the media is
+above `MEDIA_DOWNLOAD_MAX_BYTES`, the download timed out, or WhatsApp no longer holds the file ·
+`501` on the Baileys engine when there is no stored copy, since it has no synchronous per-chat fetch
+to reach a message it did not see arrive
 
 Note: this is a three-path-segment route, so it never collides with the two-segment
 `GET /messages/:chatId/history` regardless of declaration order.

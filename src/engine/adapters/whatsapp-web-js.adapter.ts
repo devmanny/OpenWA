@@ -718,6 +718,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.messaging.getChatHistory(chatId, limit, includeMedia, mediaMaxBytes, signal);
   }
 
+  getMessageMedia(chatId: string, messageId: string): Promise<IncomingMessage['media'] | undefined> {
+    return this.messaging.getMessageMedia(chatId, messageId);
+  }
+
   // Delete Message
   starMessage(chatId: string, messageId: string, star: boolean): Promise<void> {
     return this.messaging.starMessage(chatId, messageId, star);

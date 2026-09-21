@@ -118,6 +118,33 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         message.getChatHistory(input.sessionId, input.chatId, input.limit, input.includeMedia, input.deep),
     }),
     defineTool({
+      name: 'MessageDownloadMedia',
+      description:
+        'Download the media (document, image, video, audio, sticker) of ONE message as base64. Serves ' +
+        'the stored copy when the gateway has it, else downloads it live from WhatsApp — so it works ' +
+        'for a message of any age, including one that arrived before the gateway started or that ' +
+        'MessageHistory lists without media. Take chatId and messageId (the `id` field) from ' +
+        'MessageHistory or MessageList (`waMessageId`).',
+      tier: 'read',
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().min(1).describe('Chat JID containing the message'),
+        messageId: z.string().min(1).describe('Serialized WhatsApp message id whose media to download'),
+      }),
+      handler: async input => {
+        const media = await message.downloadMessageMedia(input.sessionId, input.chatId, input.messageId);
+        return {
+          messageId: input.messageId,
+          mimetype: media.declaredMimetype,
+          filename: media.filename,
+          sizeBytes: media.buffer.length,
+          source: media.source,
+          data: media.buffer.toString('base64'),
+        };
+      },
+    }),
+    defineTool({
       name: 'MessageGetReactions',
       description: 'Get reactions for a specific message, including which contacts sent which emoji.',
       tier: 'read',

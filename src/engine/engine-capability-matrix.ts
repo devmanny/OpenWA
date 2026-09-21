@@ -226,6 +226,12 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     evidence:
       'baileys no getLabel/fetchLabel in lib/**/*.d.ts; chats.d.ts:69-73 + business.d.ts:162-166 expose ONLY writes; derivable only from an app-state-sync event cache; wwjs Client.getLabels (Client.js:2760)',
   },
+  getMessageMedia: {
+    wwjs: { status: 'supported' },
+    baileys: { status: 'not-available', rootCause: 'library-limitation' },
+    evidence:
+      'wwjs Client.getMessageById (index.d.ts:115) with a widening Chat.fetchMessages walk as fallback, then Message.downloadMedia; baileys shares the getChatHistory root cause — no synchronous per-chat fetch, so a message the adapter did not see arrive is unreachable',
+  },
   getMessageReactions: {
     wwjs: { status: 'supported' },
     baileys: { status: 'not-available', rootCause: 'library-limitation' },

@@ -569,6 +569,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
   ): Promise<IncomingMessage[]> {
     return this.unsupported('getChatHistory');
   }
+  // Same root cause as getChatHistory: with no synchronous per-chat fetch there is no way to reach
+  // a message this adapter did not see arrive, and one it did see is already served from the archive.
+  getMessageMedia(_chatId: string, _messageId: string): Promise<IncomingMessage['media'] | undefined> {
+    return this.unsupported('getMessageMedia');
+  }
   getLabels(): Promise<Label[]> {
     return this.unsupported('getLabels');
   }

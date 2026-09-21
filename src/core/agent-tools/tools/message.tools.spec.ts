@@ -55,6 +55,31 @@ describe('messageTools', () => {
     expect(out).toEqual([{ id: 'm1' }]);
   });
 
+  it('MessageDownloadMedia delegates to downloadMessageMedia and returns the bytes as base64', async () => {
+    const downloadMessageMedia = jest.fn().mockResolvedValue({
+      buffer: Buffer.from('%PDF-1.4'),
+      mimetype: 'application/octet-stream',
+      declaredMimetype: 'application/pdf',
+      filename: 'invoice.pdf',
+      source: 'live',
+    });
+    const tools = makeTools({ downloadMessageMedia } as unknown as MessageService);
+    const out = await run(tools.get('MessageDownloadMedia')!, {
+      sessionId: 's1',
+      chatId: '628111@c.us',
+      messageId: 'm1',
+    });
+    expect(downloadMessageMedia).toHaveBeenCalledWith('s1', '628111@c.us', 'm1');
+    expect(out).toEqual({
+      messageId: 'm1',
+      mimetype: 'application/pdf',
+      filename: 'invoice.pdf',
+      sizeBytes: 8,
+      source: 'live',
+      data: Buffer.from('%PDF-1.4').toString('base64'),
+    });
+  });
+
   it('MessageGetReactions delegates to getMessageReactions', async () => {
     const getMessageReactions = jest.fn().mockResolvedValue([{ emoji: '👍' }]);
     const tools = makeTools({ getMessageReactions } as unknown as MessageService);

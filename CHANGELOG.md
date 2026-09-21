@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inbound commerce messages arrive typed `order` and `product` instead of a bodyless `unknown`, on both engines, and are accepted by webhook and automation-rule message-type filters.
 - The Python SDK's `ChatHistoryMessage` carries the commerce `order` and `product` blocks, with required fields and enums matching the contract.
+- A message's media can be downloaded however old it is. `GET /messages/:chatId/:messageId/media` falls back to a live download of that one message when the gateway holds no stored copy, and the new MCP `MessageDownloadMedia` tool returns the bytes as base64 with the sender-declared mimetype and filename. This reaches attachments that arrived before the session existed or sit beyond the 100-message window of `history?includeMedia=true`, and fixes the dashboard attachment button for them (`whatsapp-web.js` only).
 
 ### Fixed
 
