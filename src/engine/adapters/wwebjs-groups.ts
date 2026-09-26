@@ -18,7 +18,8 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, withPage, reportPageDeath } from './wwebjs-host';
+import { ensureGroupCreateModule } from './wwebjs-group-create';
 
 /**
  * Extracts the JID of the parent community a group is linked to, if any.
@@ -156,29 +157,27 @@ export class WwebjsGroups {
     }
   }
 
-  /**
-   * Not available on this engine, despite `Client.createGroup` existing and being typed
-   * `Promise<CreateGroupResult | string>` (`index.d.ts`).
-   *
-   * Its page body reaches a WhatsApp Web internal that no longer exposes `findImpl`
-   * (`Client.js:2325`, inside the injected evaluate). Measured against a live session on two
-   * different WhatsApp Web builds — `2.3000.1044858477-alpha` auto-resolved from the registry, and
-   * `2.3000.1044770897-alpha` pinned explicitly — with identical results:
-   * `TypeError: this.findImpl is not a function`, reaching the caller as a bare 500. Bare and
-   * `@c.us`-qualified participant ids fail the same way, so the id shape is not the variable.
-   *
-   * The build was varied deliberately because this registry pin moves on its own between restarts;
-   * two builds failing the same way is what separates a library limitation from build drift. The
-   * Baileys engine creates groups normally on the same account.
-   *
-   * Nothing here can be patched around: `findImpl` belongs to the page, not to whatsapp-web.js —
-   * it appears in neither the installed `Client.js` nor any OpenWA patcher. Restore this method
-   * when upstream adopts a page API that WhatsApp Web still provides.
-   */
-  /* eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars */
-  async createGroup(_name: string, _participants: string[]): Promise<Group> {
+  async createGroup(name: string, participants: string[]): Promise<Group> {
     this.host.ensureReady();
-    throw new EngineNotSupportedError('createGroup');
+    // Creation is not replay-safe: a lost response can leave a real group behind. Report a
+    // dead page without turning it into a retryable 503, and never retry the mutation here.
+    return reportPageDeath(this.host, 'createGroup', async () => {
+      await this.client().pupPage!.evaluate(ensureGroupCreateModule);
+      // wwjs 1.34.7 reads `announce` instead of the documented `isAnnounce`, and the
+      // WA job inverts it (upstream #201767). Keep normal member messaging enabled.
+      const options = { isAnnounce: false, announce: true, isRestrict: true };
+      const result = await this.client().createGroup(name, participants.map(toParticipantWid), options);
+      if (typeof result === 'string') {
+        throw new EngineRefusedError(result);
+      }
+      const id = readWid(result?.gid);
+      if (!id?.endsWith('@g.us')) {
+        throw new Error('Group creation returned no group id; check existing groups before retrying');
+      }
+      // Do not count requested or privately invited contacts as members. A subsequent
+      // getGroupInfo reads confirmed membership, without risking a failed read hiding this id.
+      return { id, name: result.title || name, isAdmin: true, linkedParentJID: null };
+    });
   }
 
   async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {

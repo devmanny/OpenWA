@@ -2735,7 +2735,9 @@ Create a new group with an initial set of participants.
 
 **Response** `201`
 
-Returns the created `Group` directly (raw).
+Returns the created `Group` directly (raw). Supported on both engines. On whatsapp-web.js,
+`participantsCount` is omitted until membership is read through the group-info endpoint.
+If creation fails after submission, inspect existing groups before retrying: the group may already exist.
 
 ```json
 {
@@ -2747,7 +2749,7 @@ Returns the created `Group` directly (raw).
 }
 ```
 
-**Errors:** `400` validation (missing/empty `name` or `participants`, or any non-DTO field) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
+**Errors:** `400` validation (missing/empty `name` or `participants`, or any non-DTO field) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role or the engine refused creation · `409` conflict or engine not ready (retryable) · `500` creation failed or outcome unknown; check existing groups before retrying
 
 #### POST /api/sessions/:sessionId/groups/:groupId/participants
 

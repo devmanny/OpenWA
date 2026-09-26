@@ -4892,26 +4892,53 @@ describe('WhatsAppWebJsAdapter message_ack (unreadable id)', () => {
   });
 });
 
-describe('WhatsAppWebJsAdapter createGroup (not available on this engine)', () => {
+describe('WhatsAppWebJsAdapter createGroup', () => {
   const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
     (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
-    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { client: unknown }).client = {
+      pupPage: { evaluate: jest.fn().mockResolvedValue(undefined) },
+      ...(client as object),
+    };
     return adapter;
   };
 
-  // The library's own method is typed and present, so the only thing that shows it cannot work is a
-  // live call: its injected evaluate reaches a WhatsApp Web internal with no `findImpl`
-  // (`Client.js:2325`), which reached callers as a bare 500. Measured on two builds — one
-  // auto-resolved, one pinned — so this is a library limitation, not registry pin drift.
-  it('throws EngineNotSupportedError instead of calling the library', async () => {
-    const createGroup = jest.fn();
+  it.each([{ _serialized: '120363@g.us' }, { $1: '120363@g.us' }])(
+    'returns the created id across Wid variants: %j',
+    async gid => {
+      const createGroup = jest.fn().mockResolvedValue({ gid, title: 'team', participants: {} });
+      await expect(readyAdapter({ createGroup }).createGroup('team', ['628123456789'])).resolves.toEqual({
+        id: '120363@g.us',
+        name: 'team',
+        isAdmin: true,
+        linkedParentJID: null,
+      });
+      expect(createGroup).toHaveBeenCalledWith('team', ['628123456789@c.us'], {
+        isAnnounce: false,
+        announce: true,
+        isRestrict: true,
+      });
+      expect(createGroup).toHaveBeenCalledTimes(1);
+    },
+  );
 
-    await expect(readyAdapter({ createGroup }).createGroup('team', ['628123456789@c.us'])).rejects.toBeInstanceOf(
-      EngineNotSupportedError,
+  it('surfaces a library refusal without claiming success', async () => {
+    const createGroup = jest.fn().mockResolvedValue('CreateGroupError: refused');
+    await expect(readyAdapter({ createGroup }).createGroup('team', ['628123456789'])).rejects.toBeInstanceOf(
+      EngineRefusedError,
     );
-    // The point of the demotion: the caller gets a 501 and the broken page call is never made.
-    expect(createGroup).not.toHaveBeenCalled();
+  });
+
+  it('does not retry an ambiguous failure or return an unusable group id', async () => {
+    const createGroup = jest.fn().mockResolvedValue({ gid: {}, participants: {} });
+    await expect(readyAdapter({ createGroup }).createGroup('team', ['628123456789'])).rejects.toThrow(
+      'check existing groups',
+    );
+    expect(createGroup).toHaveBeenCalledTimes(1);
+    const error = new Error('lost response');
+    createGroup.mockRejectedValue(error);
+    await expect(readyAdapter({ createGroup }).createGroup('team', ['628123456789'])).rejects.toBe(error);
+    expect(createGroup).toHaveBeenCalledTimes(2);
   });
 
   it('refuses before the engine is ready, like every other guarded method', async () => {
