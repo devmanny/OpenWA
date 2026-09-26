@@ -64,6 +64,7 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   // nothing must not have an empty string pin pacing off against .env / data/.env.generated.
   'SEND_PACING_ENABLED',
   'SEND_PACING_WARMUP_SCHEDULE',
+  'SEND_PACING_CAP_WINDOW',
   'SEND_PACING_COLD_DAILY_CAP',
   'SEND_PACING_BREAKER_THRESHOLD',
   'SEND_PACING_BREAKER_COOLDOWN_MS',
