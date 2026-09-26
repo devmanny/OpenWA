@@ -65,6 +65,8 @@ describe('v1 tool surface snapshot', () => {
       'MessageReply',
       'MessageForward',
       'MessageReact',
+      'MessageDelete',
+      'MessageEdit',
       'ContactFindAll',
       'ContactFindOne',
       'ContactCheckNumber',
@@ -79,6 +81,7 @@ describe('v1 tool surface snapshot', () => {
       'GroupAddParticipants',
       'GroupSetSubject',
       'GroupSetDescription',
+      'GroupSetPicture',
       'WebhooksList',
       'WebhookFindBySession',
       'WebhookFindOne',
@@ -97,6 +100,6 @@ describe('v1 tool surface snapshot', () => {
     const actualNames = [...allAgentTools({} as never)].map(t => t.name).sort();
 
     expect(actualNames).toEqual(expected);
-    expect(expected).toHaveLength(52);
+    expect(expected).toHaveLength(55);
   });
 });

@@ -138,5 +138,37 @@ export function groupTools(group: GroupService): AnyToolDescriptor[] {
         return { success: true, message: 'Group description updated' };
       },
     }),
+    defineTool({
+      name: 'GroupSetPicture',
+      description: 'Set a group picture from an image URL or base64. Requires OPERATOR role and group admin rights.',
+      tier: 'write',
+      destructive: true,
+      requiredRole: ApiKeyRole.OPERATOR,
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        groupId: z.string().min(1).describe('Group JID (e.g. 120363xxx@g.us)'),
+        url: z
+          .string()
+          .url()
+          .regex(/^https?:\/\//)
+          .optional()
+          .describe('Image URL (http/https)'),
+        base64: z.string().min(1).optional().describe('Base64-encoded image data; takes precedence over url'),
+        mimetype: z
+          .string()
+          .regex(/^image\//)
+          .optional()
+          .describe('Image MIME type; required with base64'),
+      }),
+      handler: async input => {
+        await group.setGroupPicture(input.sessionId, input.groupId, {
+          url: input.url,
+          base64: input.base64,
+          mimetype: input.mimetype,
+        });
+        return { success: true, message: 'Group picture updated' };
+      },
+    }),
   ];
 }

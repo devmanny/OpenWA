@@ -472,5 +472,55 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           .reactToMessage(input.sessionId, { chatId: input.chatId, messageId: input.messageId, emoji: input.emoji })
           .then(() => ({ success: true })),
     }),
+    defineTool({
+      name: 'MessageDelete',
+      description:
+        'Delete a message. By default it is deleted for everyone (revoked on every device), which cannot be ' +
+        'undone; WhatsApp only allows that for a limited time after sending. Requires OPERATOR role.',
+      tier: 'write',
+      destructive: true,
+      requiredRole: ApiKeyRole.OPERATOR,
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().describe('Chat JID containing the message'),
+        messageId: z.string().describe('ID of the message to delete'),
+        forEveryone: z
+          .boolean()
+          .optional()
+          .describe('Delete for everyone (default true). Set false to delete only on this account.'),
+      }),
+      handler: input =>
+        message
+          .deleteMessage(input.sessionId, {
+            chatId: input.chatId,
+            messageId: input.messageId,
+            forEveryone: input.forEveryone,
+          })
+          .then(() => ({ success: true })),
+    }),
+    defineTool({
+      name: 'MessageEdit',
+      description:
+        'Replace the text of a message this account sent. WhatsApp only allows editing text messages for a ' +
+        'short time after sending. Mentions are re-applied, not preserved: pass them again. Requires OPERATOR role.',
+      tier: 'write',
+      requiredRole: ApiKeyRole.OPERATOR,
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().describe('Chat JID containing the message'),
+        messageId: z.string().describe('ID of the message to edit'),
+        body: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('New text body for the message'),
+        mentions: mentionsSchema,
+      }),
+      handler: input =>
+        message.editMessage(input.sessionId, {
+          chatId: input.chatId,
+          messageId: input.messageId,
+          body: input.body,
+          mentions: input.mentions,
+        }),
+    }),
   ];
 }

@@ -419,4 +419,61 @@ describe('messageTools', () => {
     });
     expect(out).toEqual({ success: true });
   });
+
+  it('MessageDelete delegates to deleteMessage, leaving forEveryone to the service default', async () => {
+    const deleteMessage = jest.fn().mockResolvedValue(undefined);
+    const tools = makeTools({ deleteMessage } as unknown as MessageService);
+    const out = await run(tools.get('MessageDelete')!, {
+      sessionId: 's1',
+      chatId: '120363@g.us',
+      messageId: 'm1',
+    });
+    expect(deleteMessage).toHaveBeenCalledWith('s1', {
+      chatId: '120363@g.us',
+      messageId: 'm1',
+      forEveryone: undefined,
+    });
+    expect(out).toEqual({ success: true });
+  });
+
+  it('MessageDelete is flagged destructive and passes an explicit local-only delete through', async () => {
+    const deleteMessage = jest.fn().mockResolvedValue(undefined);
+    const tools = makeTools({ deleteMessage } as unknown as MessageService);
+    expect(tools.get('MessageDelete')!.destructive).toBe(true);
+    await run(tools.get('MessageDelete')!, {
+      sessionId: 's1',
+      chatId: '120363@g.us',
+      messageId: 'm1',
+      forEveryone: false,
+    });
+    expect(deleteMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ forEveryone: false }));
+  });
+
+  it('MessageEdit delegates to editMessage with the new body and mentions', async () => {
+    const editMessage = jest.fn().mockResolvedValue({ messageId: 'm1', timestamp: 1 });
+    const tools = makeTools({ editMessage } as unknown as MessageService);
+    const out = await run(tools.get('MessageEdit')!, {
+      sessionId: 's1',
+      chatId: '120363@g.us',
+      messageId: 'm1',
+      body: '@62811 texto corregido',
+      mentions: ['62811@c.us'],
+    });
+    expect(editMessage).toHaveBeenCalledWith('s1', {
+      chatId: '120363@g.us',
+      messageId: 'm1',
+      body: '@62811 texto corregido',
+      mentions: ['62811@c.us'],
+    });
+    expect(out).toEqual({ messageId: 'm1', timestamp: 1 });
+  });
+
+  it('MessageEdit rejects an empty body before reaching the service', async () => {
+    const editMessage = jest.fn();
+    const tools = makeTools({ editMessage } as unknown as MessageService);
+    await expect(
+      run(tools.get('MessageEdit')!, { sessionId: 's1', chatId: '120363@g.us', messageId: 'm1', body: '' }),
+    ).rejects.toThrow();
+    expect(editMessage).not.toHaveBeenCalled();
+  });
 });
