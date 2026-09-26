@@ -1666,11 +1666,26 @@ as an unknown property.
 
 **The id is engine-specific and is deliberately not harmonised.**
 
-|                      | whatsapp-web.js                                  | Baileys                           |
-| -------------------- | ------------------------------------------------ | --------------------------------- |
-| id to supply         | the serialized message id (`true_<chat>_<hash>`) | the raw message key id            |
-| where it is resolved | in the WhatsApp Web page                         | the gateway's local message store |
-| message not found    | `404` — the send is refused                      | `404` — the send is refused       |
+|                      | whatsapp-web.js                                                    | Baileys                           |
+| -------------------- | ------------------------------------------------------------------ | --------------------------------- |
+| id to supply         | the serialized message id (`true_<chat>_<hash>`), or the bare hash | the raw message key id            |
+| where it is resolved | in the WhatsApp Web page, loading older messages until it is found | the gateway's local message store |
+| message not found    | `404` — the send is refused                                        | `404` — the send is refused       |
+
+**Quoting old messages (whatsapp-web.js).** WhatsApp Web can only quote a message it has loaded, so
+before the send the gateway finds the quoted message and loads it: first by id, then by loading the
+chat's earlier messages in widening steps (100, 500, 2000 — the same reach as a deep history read)
+until it appears. This applies to every quoted send and to `POST /messages/reply`, which used to look
+at the last 100 messages only. The id may arrive in any of the shapes the same message goes by:
+
+- the serialized id as the page has it today, e.g. `false_<lid>@lid_<hash>`;
+- the pre-migration form stored with older rows for a contact WhatsApp has since moved to `@lid`,
+  e.g. `false_<phone>@c.us_<hash>` — it is matched by its hash inside the chat being sent to;
+- the bare `<hash>`.
+
+The message is quoted by the id the page reports for it, whichever shape was supplied. A message
+further back than 2000 messages, or not in the chat at all, is a `404` and nothing is sent. The first
+quote of an old message costs one history load; later quotes of it find it already loaded.
 
 An id the engine cannot resolve **fails the send** rather than delivering the message unquoted. On
 whatsapp-web.js that is a deliberate choice: the library's default is to send anyway and report
@@ -2018,7 +2033,10 @@ Reply to a message, quoting a prior message.
 
 The quoted body is best-effort resolved from the DB for the reply preview.
 
-**Errors:** `400` validation failure / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `500` engine error · `409` conflict or engine not ready (retryable)
+The quoted message is found however old it is, and in any of its id shapes — see
+[Quoted sends](#quoted-sends). It must belong to `chatId`.
+
+**Errors:** `400` validation failure / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `404` quoted message not found in the chat (nothing is sent) · `500` engine error · `409` conflict or engine not ready (retryable)
 
 #### POST /api/sessions/:sessionId/messages/forward
 

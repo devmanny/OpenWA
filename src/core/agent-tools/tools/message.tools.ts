@@ -30,7 +30,8 @@ const quotedMessageIdSchema = z
   .optional()
   .describe(
     'Quote an earlier message, making this send a reply. Engine-specific: whatsapp-web.js takes ' +
-      'the serialized message id, Baileys the raw key id of a message it has already stored.',
+      'the serialized message id (the waMessageId MessageList returns) or its bare key, and finds the ' +
+      'message however old it is; Baileys takes the raw key id of a message it has already stored.',
   );
 
 /**
@@ -413,14 +414,18 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'MessageReply',
-      description: 'Reply to a specific message (quoted reply). Requires OPERATOR role.',
+      description:
+        'Reply to a specific message of the chat (quoted reply). On whatsapp-web.js the message can be ' +
+        'however old. Requires OPERATOR role.',
       tier: 'write',
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
         chatId: z.string().describe('Chat JID'),
-        quotedMessageId: z.string().describe('ID of the message to quote/reply to'),
+        quotedMessageId: z
+          .string()
+          .describe('ID of the message to quote/reply to: the waMessageId MessageList returns, or its bare key'),
         text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('Reply text content'),
         mentions: mentionsSchema,
       }),
