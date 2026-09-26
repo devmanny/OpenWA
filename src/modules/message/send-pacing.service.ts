@@ -323,15 +323,19 @@ export class SendPacingService {
     const ageDays = Math.floor((dayStart.getTime() - startOfUtcDay(session.createdAt).getTime()) / DAY_MS);
     const allowance = this.allowanceForAge(config.warmupSchedule, ageDays);
 
-    const sentToday = await this.messageRepository.count({
-      where: { sessionId, direction: MessageDirection.OUTGOING, createdAt: MoreThanOrEqual(dayStart) },
+    // The rule keeps its `daily_cap` id in metrics and audit rows even on the hourly window: it is the
+    // overall-cap rule, and renaming it would split one alert series in two.
+    const hourly = config.capWindow === 'hour';
+    const windowStart = hourly ? startOfUtcHour(new Date()) : dayStart;
+    const sentInWindow = await this.messageRepository.count({
+      where: { sessionId, direction: MessageDirection.OUTGOING, createdAt: MoreThanOrEqual(windowStart) },
     });
-    if (sentToday < allowance) return;
+    if (sentInWindow < allowance) return;
 
-    this.refuse('daily_cap', sessionId, secondsUntilNextUtcDay(), {
-      reason: `Daily send allowance of ${allowance} reached for a session ${ageDays} day(s) old`,
+    this.refuse('daily_cap', sessionId, hourly ? secondsUntilNextUtcHour() : secondsUntilNextUtcDay(), {
+      reason: `${hourly ? 'Hourly' : 'Daily'} send allowance of ${allowance} reached for a session ${ageDays} day(s) old`,
       allowance,
-      sentToday,
+      sentToday: sentInWindow,
     });
   }
 
@@ -528,4 +532,16 @@ function startOfUtcDay(at: Date): Date {
 function secondsUntilNextUtcDay(): number {
   const now = Date.now();
   return Math.max(1, Math.ceil((startOfUtcDay(new Date(now)).getTime() + DAY_MS - now) / 1000));
+}
+
+const HOUR_MS = 3_600_000;
+
+/** Same UTC reasoning as {@link startOfUtcDay}, for the hourly cap window. */
+function startOfUtcHour(at: Date): Date {
+  return new Date(Math.floor(at.getTime() / HOUR_MS) * HOUR_MS);
+}
+
+function secondsUntilNextUtcHour(): number {
+  const now = Date.now();
+  return Math.max(1, Math.ceil((startOfUtcHour(new Date(now)).getTime() + HOUR_MS - now) / 1000));
 }

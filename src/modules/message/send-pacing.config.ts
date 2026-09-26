@@ -17,6 +17,12 @@ export interface SendPacingConfig {
    */
   warmupSchedule: number[];
   /**
+   * The window the `warmupSchedule` allowance is counted over: a UTC `day` (the default) or a UTC
+   * `hour`. The session's age, and so the rung of the ramp, is still measured in whole days either
+   * way — the window only decides how often the budget refills. The cold cap is always daily.
+   */
+  capWindow: SendPacingCapWindow;
+  /**
    * Daily allowance for **cold reachouts** — the first message to a chat this account has no history
    * with in either direction. Same by-age shape as `warmupSchedule`, and a single number is a flat
    * cap. Empty disables the rule.
@@ -31,6 +37,8 @@ export interface SendPacingConfig {
   /** How long the breaker stays open before it lets traffic through again. */
   breakerCooldownMs: number;
 }
+
+export type SendPacingCapWindow = 'day' | 'hour';
 
 /** A cautious two-week ramp: ~1 message every 3 minutes on day one, ~2/minute by the second week. */
 const DEFAULT_WARMUP_SCHEDULE = [20, 40, 80, 160, 320, 640, 1000];
@@ -65,6 +73,11 @@ function parseSchedule(raw: string | undefined, fallback: number[]): number[] {
   return parts.map(n => Math.floor(n));
 }
 
+/** Anything but an exact `hour` keeps the daily window, so a typo never loosens the cap. */
+function parseCapWindow(raw: string | undefined): SendPacingCapWindow {
+  return raw?.trim() === 'hour' ? 'hour' : 'day';
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number, min: number): number {
   const value = Number(raw);
   if (!Number.isFinite(value) || value < min) return fallback;
@@ -76,6 +89,7 @@ export function computeSendPacingConfig(env: NodeJS.ProcessEnv = process.env): S
   return {
     enabled: env.SEND_PACING_ENABLED === 'true',
     warmupSchedule: parseSchedule(env.SEND_PACING_WARMUP_SCHEDULE, DEFAULT_WARMUP_SCHEDULE),
+    capWindow: parseCapWindow(env.SEND_PACING_CAP_WINDOW),
     coldSchedule: parseSchedule(env.SEND_PACING_COLD_DAILY_CAP, DEFAULT_COLD_SCHEDULE),
     breakerThreshold: parsePositiveInt(
       env.SEND_PACING_BREAKER_THRESHOLD,
