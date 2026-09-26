@@ -6107,14 +6107,11 @@ describe('SessionService', () => {
       service.onApplicationBootstrap();
       await autoStartRun();
 
-      const options = (repository.find as jest.Mock).mock.calls[0][0] as {
-        where: Array<{ phone: { type: string }; status: { value: SessionStatus[] } }>;
-      };
+      const [[options]] = (repository.find as jest.Mock).mock.calls as Array<
+        [{ where: Array<{ phone: { type: string }; status: { value: SessionStatus[] } }> }]
+      >;
       expect(options.where[0].phone.type).toBe('not');
-      expect(options.where[0].status.value).toEqual([
-        SessionStatus.DISCONNECTED,
-        SessionStatus.FAILED,
-      ]);
+      expect(options.where[0].status.value).toEqual([SessionStatus.DISCONNECTED, SessionStatus.FAILED]);
     });
 
     it('auto-starts every previously-authenticated session', async () => {
