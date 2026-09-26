@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Ten conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Eleven conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
@@ -27,11 +27,16 @@
  *      unblock after WhatsApp Web removed the contact resolver they used.
  *   8. `node scripts/patch-wwebjs-group-description.js --best-effort` when present, realigning the
  *      group-description job call with the options object the page now takes, gated the same way.
- *   9. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
+ *   9. `node scripts/patch-wwebjs-media-model-spread.js --best-effort` when present, sending the
+ *      SERIALIZED media data into the outgoing message instead of the media model, without which
+ *      every media send throws inside the page. Last of the wwjs patches on purpose: it rewrites a
+ *      line in the same `Injected/Utils.js` that steps 2-4 edit, so it runs against the tree they
+ *      leave behind rather than shifting it under them.
+ *  10. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
  *      bound, gated the same way.
- *  10. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
- *      newsletter-create parse fix. Steps 9-10 are the Baileys patches, so a Baileys-only install
- *      runs those and skips 2-8.
+ *  11. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
+ *      newsletter-create parse fix. Steps 10-11 are the Baileys patches, so a Baileys-only install
+ *      runs those and skips 2-9.
  *
  * Structured like scripts/patch-wwebjs-201832.js: pure planning + injectable spawn, so the spec
  * (scripts/postinstall.spec.js, node:test) exercises every branch without a real npm run.
@@ -137,6 +142,17 @@ function planSteps(root, env = process.env) {
         '(scripts/patch-wwebjs-group-description.js --best-effort)',
       command: process.execPath,
       args: [groupDescriptionPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const mediaModelSpreadPatcher = path.join(root, 'scripts', 'patch-wwebjs-media-model-spread.js');
+  if (fs.existsSync(mediaModelSpreadPatcher)) {
+    steps.push({
+      name:
+        'whatsapp-web.js media send model spread ' +
+        '(scripts/patch-wwebjs-media-model-spread.js --best-effort)',
+      command: process.execPath,
+      args: [mediaModelSpreadPatcher, '--best-effort'],
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }
