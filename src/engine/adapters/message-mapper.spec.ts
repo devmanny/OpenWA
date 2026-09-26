@@ -157,7 +157,10 @@ describe('buildIncomingMessageBase', () => {
 
   it('yields nothing when the id that makes the message actionable is missing', () => {
     expect(buildIncomingMessageBase({ ...base, type: 'order', token: 'tok' }).order).toBeUndefined();
-    expect(buildIncomingMessageBase({ ...base, type: 'product', title: 'Sample' }).product).toBeUndefined();
+    // whatsapp-web.js exposes no catalog field, so an id-less product (a whole-catalog share included) keeps its type.
+    const product = buildIncomingMessageBase({ ...base, type: 'product', title: 'Sample' });
+    expect(product.type).toBe('product');
+    expect(product.product).toBeUndefined();
   });
 
   it('does not fabricate a product from a title on a non-commerce message', () => {
@@ -184,6 +187,11 @@ describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundar
     ['poll_creation', 'poll'],
     ['order', 'order'],
     ['product', 'product'],
+    // A tapped button, list row or template button: WA Web carries the chosen option's text in the
+    // body, and Baileys reports the same replies as text (#562).
+    ['buttons_response', 'text'],
+    ['list_response', 'text'],
+    ['template_button_reply', 'text'],
     ['e2e_notification', 'unknown'], // any unmapped wwebjs type
   ])('maps wwebjs type %s -> %s', (raw, expected) => {
     expect(mapWwebjsMessageType(raw)).toBe(expected);

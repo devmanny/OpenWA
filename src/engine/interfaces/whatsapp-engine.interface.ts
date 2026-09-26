@@ -29,6 +29,12 @@ export enum EngineStatus {
 export interface MessageResult {
   id: string;
   timestamp: number;
+  /**
+   * Display text actually sent, when it differs from the caller's input. Button clicks resolve
+   * the visible label from the stored prompt when the caller omitted `text`, so the persisted
+   * row can store that label instead of the raw `buttonId`.
+   */
+  body?: string;
 }
 
 /**
@@ -136,6 +142,28 @@ export interface IncomingMessage {
     description?: string;
     businessOwnerJid?: string;
   };
+  /**
+   * Set when the sender tapped a WhatsApp Business button, template quick-reply, list row, or
+   * native-flow control. `id` is the stable handle the business defined on the button/row; `text`
+   * is the visible label when WhatsApp still carries it (also mirrored into `body`). **Baileys
+   * only**: whatsapp-web.js does not surface interactive replies as structured fields.
+   */
+  button?: {
+    id: string;
+    text?: string;
+  };
+  /**
+   * Set on an inbound WhatsApp Business prompt that offers buttons (or list rows flattened as
+   * buttons): the choices shown to the recipient. URL/call CTAs are omitted, since they are not
+   * clickable via {@link IWhatsAppEngine.clickButton} and must not masquerade as button ids.
+   * Distinct from {@link IncomingMessage.button}, which is set only when someone *taps* a choice.
+   * **Baileys only.** Capped (count and label length) so a malformed prompt cannot bloat
+   * persisted rows / webhook payloads.
+   */
+  buttons?: Array<{
+    id: string;
+    text: string;
+  }>;
   /**
    * Set by the adapter when the sender is identified by a privacy id (e.g. a WhatsApp `@lid`) rather
    * than a phone number, so engine-neutral code can decide whether to attempt phone resolution without
@@ -479,9 +507,12 @@ export interface Product {
   id: string;
   name: string;
   description?: string;
-  price: number;
-  currency: string;
-  priceFormatted: string;
+  /** Absent when the catalog item carries no price. */
+  price?: number;
+  /** Absent when the catalog item carries no currency. */
+  currency?: string;
+  /** Present only when price is. */
+  priceFormatted?: string;
   imageUrl?: string;
   url: string;
   isAvailable: boolean;
@@ -618,7 +649,8 @@ export interface ReactionEvent {
  *  - whatsapp-web.js: `group_join` / `group_leave` / `group_update` /
  *    `group_membership_request` (GroupNotification).
  *  - Baileys: `group-participants.update` (add/remove only — promote/demote are not
- *    surfaced), `groups.update` (subject/desc/announce/restrict) and `group.join-request`
+ *    surfaced), `groups.update` (subject/desc/announce/restrict), `groups.upsert` (this
+ *    session added to or joining a group; participantIds is the session's own id) and `group.join-request`
  *    (action 'created' only — the wwebjs event has no revoke/reject counterpart, so only
  *    the shared signal is surfaced; rc13 itself emits the event only for non-admin-add
  *    requests — the direct self-request stub 144 is unhandled upstream, marked TODO at
@@ -642,15 +674,15 @@ export interface GroupEvent {
 
 /**
  * An incoming (ringing) call, mapped at the adapter boundary to this neutral shape:
- *  - whatsapp-web.js: the client `call` event (a `Call` object the adapter caches so a later
- *    `rejectCall` can act on it — the object is only usable while the call is live).
+ *  - whatsapp-web.js: the client `call` event (the adapter caches the ringing call id so a repeated
+ *    signal for the same call is not announced twice).
  *  - Baileys: the `call` event's `offer` status entries (other statuses are lifecycle updates and
  *    are not surfaced).
  * All ids are in the neutral dialect (`@c.us`; a lid caller stays `<id>@lid` when the lid->phone
  * mapping is unknown, resolved via the inline phone twin when the engine provides one).
  */
 export interface IncomingCallEvent {
-  /** Engine call id; the handle `rejectCall` accepts while the call is still ringing. */
+  /** Engine call id; the id `rejectCall` accepts while the call is still ringing (Baileys). */
   callId: string;
   /** Neutral caller id. */
   from: string;
@@ -773,9 +805,9 @@ export interface EngineEventCallbacks {
    */
   onGroupEvent?: (event: GroupEvent) => void;
   /**
-   * Fired when an incoming call starts ringing (consumers emit `call.received`). The call can be
-   * rejected via `rejectCall(callId)` only while it is still ringing — the adapter keeps the
-   * engine's live call handle cached for that window.
+   * Fired when an incoming call starts ringing (consumers emit `call.received`). On Baileys the call
+   * can be rejected via `rejectCall(callId)` only while it is still ringing: the adapter keeps what
+   * the rejection needs cached for that window. whatsapp-web.js refuses `rejectCall`.
    */
   onCall?: (event: IncomingCallEvent) => void;
   /**
@@ -791,7 +823,9 @@ export interface EngineEventCallbacks {
    * it; the engine keeps owning the retry.
    *
    * `attempt` is the 1-based number of the attempt being scheduled, and it resets once the connection
-   * is back (or after a long enough healthy stretch), so attempt 1 always opens a fresh episode.
+   * is back, a QR is scanned or a QR window runs out (or after a long enough healthy stretch), so
+   * attempt 1 always opens a fresh episode. The close that ends an unscanned QR window is not a reconnect
+   * and is never reported; any other close while a QR waits is.
    * `nextDelayMs` is how long the engine waits before making it. Together they are what a consumer
    * needs to tell a one-second blip from a session that has been down for an hour, which the status
    * alone cannot: the engine reports INITIALIZING for the whole episode, exactly as it does for a
@@ -852,9 +886,10 @@ export interface EngineEventCallbacks {
    *
    * Unlike the other callbacks, this one is NOT guarded on the engine still being live: a logout
    * that captured the engine registers its destructive promise even as a concurrent stop()/delete()
-   * evicts that engine, because the rm it ends in targets the session NAME's auth dir and would
-   * otherwise race a (re)created session under that same name. The lifecycle tracks the promise
-   * (keyed by the immutable captured session NAME) so start()/delete()/executeReconnect can wait
+   * evicts that engine, because the rm it ends in targets this session's auth dir and would
+   * otherwise race a (re)created session under that same name. The directory is keyed by the session
+   * id; the lifecycle tracks the promise under the immutable captured session NAME, which is unique
+   * per live row and so covers that directory, so start()/delete()/executeReconnect can wait
    * (bounded, fail-closed) for it to settle before touching that path.
    *
    * Adapters that never remove credentials on their own (e.g. Baileys until a later task wires its
@@ -1024,6 +1059,19 @@ export interface MessageOperationsCapability {
   votePoll(chatId: string, pollMessageId: string, options: string[]): Promise<void>;
 
   /**
+   * Reply to a WhatsApp Business button / list prompt as if the account tapped a choice.
+   * `buttonId` is the stable id from the prompt (see inbound `buttons[].id`); `text` is the visible
+   * label when known. **Baileys only**: whatsapp-web.js has no interactive-reply send path.
+   *
+   * The prompt must already be in the engine message store (received while the session was live).
+   * Classic `buttonsMessage` / `templateMessage` / `listMessage` prompts go through Baileys'
+   * `buttonReply` / `listReply` helpers. Native-flow `interactiveMessage` replies are unverified
+   * against a live business prompt and must not be treated as fully supported. URL/call CTA
+   * buttons are not clickable this way, only quick-reply style choices and list rows.
+   */
+  clickButton(chatId: string, messageId: string, buttonId: string, text?: string): Promise<MessageResult>;
+
+  /**
    * Pin a message in its chat for a bounded window. WhatsApp only recognises three durations —
    * 86400 (24h), 604800 (7d), 2592000 (30d) — so `durationSeconds` must be one of those; it is
    * required rather than defaulted here so neither adapter has to invent a value. In a group only
@@ -1042,13 +1090,14 @@ export interface MessageOperationsCapability {
  */
 export interface ChatHistoryCapability {
   /**
-   * Read a chat's recent messages, newest first. When `includeMedia` downloads blobs, an optional
-   * `mediaMaxBytes` tightens the declared-size pre-gate below the global MEDIA_DOWNLOAD_MAX_BYTES —
+   * Read a chat's most recent `limit` messages, returned oldest first (ascending timestamp). When
+   * `includeMedia` downloads blobs, an optional `mediaMaxBytes` tightens the declared-size pre-gate
+   * below the global MEDIA_DOWNLOAD_MAX_BYTES —
    * the status seed uses it to skip downloads the store would discard as over-cap anyway.
-   * Inlined media is additionally bounded in aggregate (CHAT_HISTORY_MEDIA_BUDGET_BYTES): once the
-   * running base64 total crosses the budget, later media messages carry the `omitted` marker instead
-   * of a download. An optional `signal` (e.g. client disconnect) stops the read loop early; the
-   * messages collected so far are returned.
+   * Inlined media is additionally bounded in aggregate (CHAT_HISTORY_MEDIA_BUDGET_BYTES), spent in
+   * that same order: once the running base64 total crosses the budget, the newer media messages
+   * carry the `omitted` marker instead of a download. An optional `signal` (e.g. client disconnect)
+   * stops the read loop early; the messages collected so far are returned.
    */
   getChatHistory(
     chatId: string,
@@ -1215,9 +1264,10 @@ export interface GroupCapability {
  */
 export interface CallCapability {
   /**
-   * Reject an incoming call. Only a currently-ringing call can be rejected: the adapter keeps the
-   * engine's live call handle (keyed by the `callId` from {@link IncomingCallEvent}) for the
-   * ringing window, and an unknown or expired callId fails with a not-found error (HTTP 404).
+   * Reject an incoming call. Only a currently-ringing call can be rejected: the Baileys adapter keeps
+   * the caller JID it needs (keyed by the `callId` from {@link IncomingCallEvent}) for the ringing
+   * window, and an unknown or expired callId fails with a not-found error (HTTP 404). whatsapp-web.js
+   * throws EngineNotSupportedError (HTTP 501): a rejection it sent did not stop a live call ringing.
    */
   rejectCall(callId: string): Promise<void>;
 

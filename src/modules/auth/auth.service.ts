@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, UpdateQueryBuilder, DeleteQueryBuilder, type QueryDeepPartialEntity } from 'typeorm';
+import { In, Repository, UpdateQueryBuilder, DeleteQueryBuilder, type QueryDeepPartialEntity } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { ipMatches } from '../../common/utils/ip';
 import { hashApiKey } from './api-key-hash';
@@ -17,6 +17,8 @@ import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { readBootstrapKey, removeBootstrapKey, writeBootstrapKey } from './bootstrap-key-file';
 import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
+import { apiKeyAuthorizationFingerprint, normalizeScopeList } from './api-key-authorization';
+import { normalizeChatAllowList } from '../../common/security/chat-scope';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
 
 /**
@@ -27,8 +29,11 @@ import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gatew
  * a developer explicitly opts in with `ALLOW_DEV_API_KEY=true`, never by default.
  */
 export function resolveSeedApiKey(): string {
-  if (process.env.API_MASTER_KEY) {
-    return process.env.API_MASTER_KEY;
+  // Trimmed because validateApiKey hashes the trimmed key: a seed hashed with a trailing newline could
+  // never authenticate. A whitespace-only value counts as unset.
+  const masterKey = process.env.API_MASTER_KEY?.trim();
+  if (masterKey) {
+    return masterKey;
   }
   if (process.env.ALLOW_DEV_API_KEY === 'true') {
     return 'dev-admin-key';
@@ -47,24 +52,6 @@ export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
   if (isNewKey) return displayKey;
   if (displayKey.startsWith('(')) return displayKey;
   return `${displayKey.slice(0, 8)}… (full key in data/.api-key or the dashboard)`;
-}
-
-/**
- * Collapse an `allowedSessions` list to the two shapes the enforcement sites actually distinguish.
- *
- * The column is `simple-array`: TypeORM joins on write and splits on read, so `['']` is stored as
- * `''` and read back as `[]`. Every site treats a zero-length list as "every session", so a write
- * that looked like a scoping landed as a widening. The DTO validator now refuses such an entry at
- * the boundary, and this is the second half: whatever reaches storage is either a non-empty list of
- * real ids, or NULL.
- *
- * NULL rather than `[]` on purpose. Both already exist in the table for the same intent, and the
- * published contract says an unscoped key omits the field, which only NULL produces.
- */
-function normalizeScopeList(list: string[] | null | undefined): string[] | null {
-  if (list == null) return null;
-  const cleaned = list.map(entry => entry.trim()).filter(entry => entry.length > 0);
-  return cleaned.length > 0 ? cleaned : null;
 }
 
 @Injectable()
@@ -202,6 +189,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       role: dto.role || ApiKeyRole.OPERATOR,
       allowedIps: dto.allowedIps || null,
       allowedSessions: normalizeScopeList(dto.allowedSessions),
+      allowedChats: normalizeChatAllowList(dto.allowedChats),
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
     });
 
@@ -237,10 +225,11 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     const removesOrSchedulesLastAdmin =
       (dto.role !== undefined && dto.role !== ApiKeyRole.ADMIN) ||
       (dto.expiresAt !== undefined && dto.expiresAt !== null) ||
-      (normalizeScopeList(dto.allowedSessions)?.length ?? 0) > 0;
+      (normalizeScopeList(dto.allowedSessions)?.length ?? 0) > 0 ||
+      (normalizeChatAllowList(dto.allowedChats)?.length ?? 0) > 0;
 
     // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
-    // allowedIps, allowedSessions, or expiry can widen or restrict what an already-connected WebSocket
+    // allowedIps, allowedSessions, allowedChats, or expiry can widen or restrict what an already-connected WebSocket
     // socket may see, so only those trigger eviction of live /events sockets — a benign rename must
     // NOT disconnect clients. REST enforces the new state immediately; without eviction a live socket
     // keeps streaming events for sessions/IPs the key just lost until it resubscribes or drops.
@@ -248,6 +237,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       role: apiKey.role,
       allowedIps: apiKey.allowedIps,
       allowedSessions: apiKey.allowedSessions,
+      allowedChats: apiKey.allowedChats,
       expiresAt: apiKey.expiresAt,
     };
 
@@ -256,6 +246,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     if (dto.role) patch.role = dto.role;
     if (dto.allowedIps !== undefined) patch.allowedIps = dto.allowedIps;
     if (dto.allowedSessions !== undefined) patch.allowedSessions = normalizeScopeList(dto.allowedSessions);
+    if (dto.allowedChats !== undefined) patch.allowedChats = normalizeChatAllowList(dto.allowedChats);
     if (dto.expiresAt !== undefined) patch.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
     let saved: ApiKey;
@@ -276,21 +267,10 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       saved = await this.findOne(id);
     }
 
-    // Compare membership, not order: a pure reorder of allowedIps/allowedSessions is a no-op for the
-    // .includes()-based enforcement, so sort before stringify to avoid a spurious eviction on a reorder.
-    // Normalize before comparing: a legacy row stored as '' reads back as [], which means the same
-    // as NULL at every enforcement site, so treating them as different would evict live sockets for a
-    // write that changed nothing.
-    const ordered = (v: string[] | null) => {
-      const normalized = normalizeScopeList(v);
-      return normalized ? [...normalized].sort() : null;
-    };
-    const authzChanged =
-      saved.role !== before.role ||
-      saved.expiresAt?.getTime() !== before.expiresAt?.getTime() ||
-      JSON.stringify(ordered(saved.allowedIps)) !== JSON.stringify(ordered(before.allowedIps)) ||
-      JSON.stringify(ordered(saved.allowedSessions)) !== JSON.stringify(ordered(before.allowedSessions));
-    if (authzChanged) {
+    // One fingerprint definition, two callers: this immediate eviction and the gateway's periodic
+    // re-validation sweep. Sharing it keeps the two from disagreeing about what an authorization
+    // change is (membership over order, '' and NULL alike, usage statistics ignored).
+    if (apiKeyAuthorizationFingerprint(saved) !== apiKeyAuthorizationFingerprint(before)) {
       this.evictActiveSockets(id, 'authorization_changed');
     }
     return saved;
@@ -361,7 +341,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     return (
       `${col('role')} = :adminRole AND ${col('isActive')} = 1 AND ` +
       `(${col('expiresAt')} IS NULL OR ${col('expiresAt')} > :guardNow) AND ` +
-      `(${col('allowedSessions')} = '' OR ${col('allowedSessions')} IS NULL)`
+      `(${col('allowedSessions')} = '' OR ${col('allowedSessions')} IS NULL) AND ` +
+      `(${col('allowedChats')} = '' OR ${col('allowedChats')} IS NULL)`
     );
   }
 
@@ -445,6 +426,17 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * The current rows for a set of key ids, in one statement. Feeds the WebSocket gateway's periodic
+   * re-validation of the keys behind its live sockets: an id whose row is gone simply comes back
+   * absent, which the gateway reads as deleted. Usage statistics are deliberately not recorded here,
+   * so a passive socket does not look like traffic.
+   */
+  async findAuthorizationStates(ids: string[]): Promise<ApiKey[]> {
+    if (ids.length === 0) return [];
+    return this.apiKeyRepository.findBy({ id: In(ids) });
   }
 
   async validateApiKey(rawKey: string, clientIp?: string, sessionId?: string): Promise<ApiKey> {
