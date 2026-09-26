@@ -18,6 +18,8 @@ const logger = createLogger('wwebjs-send-shape-refusal.spec');
 function makeMessaging(): { messaging: WwebjsMessaging; client: { sendMessage: jest.Mock } } {
   const client = {
     sendMessage: jest.fn().mockResolvedValue({ id: { _serialized: 'M1' }, timestamp: 1 }),
+    // A quoted send finds the quoted message first; here it is already loaded in the page.
+    getMessageById: jest.fn().mockResolvedValue({ id: { _serialized: QUOTED, id: '3EB0ABCD', fromMe: true } }),
   };
   const host = {
     ensureReady: jest.fn(),
@@ -26,6 +28,7 @@ function makeMessaging(): { messaging: WwebjsMessaging; client: { sendMessage: j
     logger,
     config: {},
     getNumberId: jest.fn(),
+    isPageTransportError: () => false,
     reportIfPageTransportError: jest.fn(),
   } as unknown as WwebjsEngineHost;
   return { messaging: new WwebjsMessaging(host), client };

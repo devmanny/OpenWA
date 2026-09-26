@@ -497,8 +497,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: z.string().describe('Chat JID containing the message'),
-        messageId: z.string().describe('ID of the message to delete'),
+        chatId: z.string().min(1).describe('Chat JID containing the message'),
+        messageId: z.string().min(1).describe('ID of the message to delete'),
         forEveryone: z
           .boolean()
           .optional()
@@ -523,8 +523,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: z.string().describe('Chat JID containing the message'),
-        messageId: z.string().describe('ID of the message to edit'),
+        chatId: z.string().min(1).describe('Chat JID containing the message'),
+        messageId: z.string().min(1).describe('ID of the message to edit'),
         body: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('New text body for the message'),
         mentions: mentionsSchema,
       }),

@@ -16,7 +16,11 @@ const CHAT = '628999@c.us';
 const MESSAGE_ID = 'true_628999@c.us_ABC';
 
 function makeMessaging(): WwebjsMessaging {
-  const client = { getChatById: jest.fn().mockResolvedValue(undefined) };
+  // getMessageById resolves null for a message the page has not loaded; a reply looks there first.
+  const client = {
+    getChatById: jest.fn().mockResolvedValue(undefined),
+    getMessageById: jest.fn().mockResolvedValue(null),
+  };
   const host = {
     ensureReady: jest.fn(),
     getClient: () => client as unknown as Client,
