@@ -4336,37 +4336,41 @@ describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid 
     expect(getNumberId).toHaveBeenCalledTimes(1);
   });
 
+  // A reply is a quoted text send: the quoted message is found through the page store, and the send
+  // carries its id with quote errors made visible (see wwebjs-quoted-send.spec.ts).
+  const QUOTE = { quotedMessageId: 'Q1', ignoreQuoteErrors: false };
+  const quotedLookup = () => jest.fn().mockResolvedValue({ id: { _serialized: 'Q1', id: 'Q1', fromMe: false } });
+
   it('reply routes its send leg to the resolved @lid (#583 R1)', async () => {
-    const reply = jest.fn().mockResolvedValue(sentMessage);
-    const quoted = { id: { _serialized: 'Q1' }, reply };
-    const getChatById = jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue([quoted]) });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
     const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
-    await ready({ getChatById, getNumberId }).replyToMessage('529934031058@c.us', 'Q1', 'hi');
-    expect(reply).toHaveBeenCalledWith('hi', '159442138038327@lid');
+    await ready({ getMessageById: quotedLookup(), getNumberId, sendMessage }).replyToMessage(
+      '529934031058@c.us',
+      'Q1',
+      'hi',
+    );
+    expect(sendMessage).toHaveBeenCalledWith('159442138038327@lid', 'hi', QUOTE);
   });
 
   it('reply is unchanged for a non-migrated contact (#583 R1)', async () => {
-    const reply = jest.fn().mockResolvedValue(sentMessage);
-    const quoted = { id: { _serialized: 'Q1' }, reply };
-    const getChatById = jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue([quoted]) });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
     const getNumberId = jest.fn().mockResolvedValue({ _serialized: '628@c.us' });
-    await ready({ getChatById, getNumberId }).replyToMessage('628@c.us', 'Q1', 'hi');
-    expect(reply).toHaveBeenCalledWith('hi', '628@c.us');
+    await ready({ getMessageById: quotedLookup(), getNumberId, sendMessage }).replyToMessage('628@c.us', 'Q1', 'hi');
+    expect(sendMessage).toHaveBeenCalledWith('628@c.us', 'hi', QUOTE);
   });
 
-  it('reply passes the tag list through as send options, and omits the options bag without one', async () => {
-    const reply = jest.fn().mockResolvedValue(sentMessage);
-    const quoted = { id: { _serialized: 'Q1' }, reply };
-    const getChatById = jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue([quoted]) });
+  it('reply passes the tag list through as send options, and adds none without one', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
     const getNumberId = jest.fn().mockResolvedValue({ _serialized: '628@c.us' });
+    const adapter = ready({ getMessageById: quotedLookup(), getNumberId, sendMessage });
 
-    await ready({ getChatById, getNumberId }).replyToMessage('628@c.us', 'Q1', 'hi @62811', ['62811@c.us']);
-    expect(reply).toHaveBeenCalledWith('hi @62811', '628@c.us', { mentions: ['62811@c.us'] });
+    await adapter.replyToMessage('628@c.us', 'Q1', 'hi @62811', ['62811@c.us']);
+    expect(sendMessage).toHaveBeenCalledWith('628@c.us', 'hi @62811', { ...QUOTE, mentions: ['62811@c.us'] });
 
-    // Control: an empty list must not start passing an options bag to every untagged reply.
-    reply.mockClear();
-    await ready({ getChatById, getNumberId }).replyToMessage('628@c.us', 'Q1', 'hi', []);
-    expect(reply).toHaveBeenCalledWith('hi', '628@c.us');
+    // Control: an empty list must not start passing a mentions key on every untagged reply.
+    sendMessage.mockClear();
+    await adapter.replyToMessage('628@c.us', 'Q1', 'hi', []);
+    expect(sendMessage).toHaveBeenCalledWith('628@c.us', 'hi', QUOTE);
   });
 
   it('forward routes to the resolved @lid and recovers the id from that chat (#583 R1)', async () => {

@@ -111,6 +111,49 @@ export function isQuoteUnresolvedError(err: unknown): boolean {
 }
 
 /**
+ * Where a quoted message may come from: anywhere the page can see (`send-*` with `quotedMessageId`), or
+ * only the chat the message is sent to (`POST /messages/reply`).
+ */
+type QuoteScope = 'any-chat' | 'same-chat';
+
+/** The parts of a message id a caller may hand us, in whichever of its shapes they had to hand. */
+export interface MessageRef {
+  /** The bare message key (`3EB0…`) — the one part every shape of the same message shares. */
+  key: string;
+  /** Present only for a serialized id; a bare key says nothing about direction. */
+  fromMe?: boolean;
+  /** The chat the serialized id was addressed under: a `@lid`, its pre-migration `@c.us`, a group. */
+  remote?: string;
+  /** Group messages only: the author suffix of a serialized id. */
+  participant?: string;
+}
+
+/**
+ * Split a message id into its parts. whatsapp-web.js serializes an id as
+ * `<fromMe>_<remote>_<key>[_<participant>]`, and no JID or key contains `_`, so the split is exact.
+ * Anything else is taken as a bare key: that is what a caller copying the id out of WhatsApp itself,
+ * or out of a Baileys-shaped payload, has.
+ */
+export function parseMessageRef(messageId: string): MessageRef {
+  const parts = messageId.split('_');
+  if ((parts.length === 3 || parts.length === 4) && (parts[0] === 'true' || parts[0] === 'false')) {
+    return { fromMe: parts[0] === 'true', remote: parts[1], key: parts[2], participant: parts[3] };
+  }
+  return { key: messageId };
+}
+
+/**
+ * Whether a loaded message is the one `ref` names. The key decides, not the serialized string: the
+ * same message is `false_<phone>@c.us_<key>` in a row stored before the contact migrated and
+ * `false_<lid>@lid_<key>` in the page today, and both must find it. Direction still has to agree when
+ * the caller stated one, so a key reused across an incoming and an outgoing message cannot cross.
+ */
+function matchesRef(msg: Message, messageId: string, ref: MessageRef): boolean {
+  if (msg.id._serialized === messageId) return true;
+  return msg.id.id === ref.key && (ref.fromMe === undefined || msg.id.fromMe === ref.fromMe);
+}
+
+/**
  * Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped).
  *
  * `trustDeclaredType: false` keeps the fetched response's content-type for a remote URL. Use it
@@ -269,6 +312,112 @@ export class WwebjsMessaging {
   }
 
   /**
+   * Make a quoted message citable and return the id the page knows it by, or nothing when the caller
+   * asked for no quote.
+   *
+   * The page resolves a quote only from what it has loaded (`Msg.get`, then `getMessagesById` —
+   * Injected/Utils.js:177-186), so a message further back than the chat's loaded tail — or one named
+   * by its bare key, or by the `@c.us` form of a chat that has since moved to `@lid` — failed with
+   * `Could not get the quoted message` however valid it was. {@link locateMessage} finds it and, as
+   * a side effect of walking the chat back, leaves it loaded; the send then quotes it by the id the
+   * page itself reported, which is the one shape `Msg.get` is guaranteed to accept.
+   */
+  private async resolveQuote(
+    chatId: string,
+    quotedMessageId?: string,
+    scope: QuoteScope = 'any-chat',
+  ): Promise<string | undefined> {
+    if (!quotedMessageId) return undefined;
+    const quoted = await this.withPage('resolveQuote', () => this.locateMessage(chatId, quotedMessageId, scope));
+    return quoted.id._serialized;
+  }
+
+  /**
+   * Widening fetch windows for {@link locateMessage}. fetchMessages loads earlier messages on
+   * demand, so each step costs more than the last; most lookups end at the first one. The ceiling
+   * matches the deep-history limit — the furthest back any other read on this gateway reaches.
+   */
+  private static readonly MESSAGE_SEARCH_WINDOWS = [100, 500, 2000];
+
+  /**
+   * Find a message however far back it sits and whichever shape its id arrives in.
+   *
+   * 1. Straight from the page store, by id. That answers only for a message it has loaded, so the
+   *    id is also tried re-addressed to the chat being searched: a caller holding the pre-migration
+   *    `@c.us` form of a `@lid` chat's message, or just its bare key, still reaches it here.
+   * 2. Otherwise walk the chat back through {@link MESSAGE_SEARCH_WINDOWS}, matching on the key
+   *    (see {@link matchesRef}). An individual `@c.us` chat is walked again under the id it resolves
+   *    to when the first walk comes up empty, because a migrated contact's history lives under the
+   *    `@lid`.
+   *
+   * `'any-chat'` also takes the id exactly as given from the page store wherever it lives, which is
+   * what the `send-*` routes have always done; `'same-chat'` looks only inside the chat.
+   *
+   * A miss at every step is {@link MessageNotFoundError} naming the id the caller sent.
+   */
+  private async locateMessage(chatId: string, messageId: string, scope: QuoteScope = 'any-chat'): Promise<Message> {
+    const ref = parseMessageRef(messageId);
+    const searched = new Set<string>();
+    const search = async (chat: string): Promise<Message | undefined> => {
+      if (searched.has(chat)) return undefined;
+      searched.add(chat);
+      return (await this.findLoaded(chat, messageId, ref, scope)) ?? (await this.walkChatFor(chat, messageId, ref));
+    };
+    const found =
+      (await search(chatId)) ?? (chatId.endsWith('@c.us') ? await search(await this.resolveSendId(chatId)) : undefined);
+    if (!found) {
+      throw new MessageNotFoundError(messageId, chatId);
+    }
+    return found;
+  }
+
+  /** Step 1 of {@link locateMessage}: the page store, under every id shape that could name it in `chatId`. */
+  private async findLoaded(
+    chatId: string,
+    messageId: string,
+    ref: MessageRef,
+    scope: QuoteScope,
+  ): Promise<Message | undefined> {
+    const suffix = ref.participant ? `_${ref.participant}` : '';
+    const directions = ref.fromMe === undefined ? [false, true] : [ref.fromMe];
+    const candidates = new Set([
+      // As given, from whichever chat it lives in. Inside the chat this is also the re-addressed id below.
+      ...(ref.remote && scope === 'any-chat' ? [messageId] : []),
+      ...directions.map(fromMe => `${fromMe}_${chatId}_${ref.key}${suffix}`),
+    ]);
+    for (const candidate of candidates) {
+      // Resolves null for a message the page has not loaded, and throws on some WA Web builds (and
+      // for any id it cannot parse) — a miss of either kind moves on rather than failing the lookup.
+      const direct = await this.client()
+        .getMessageById(candidate)
+        .catch(() => undefined);
+      if (direct && matchesRef(direct, messageId, ref)) {
+        return direct;
+      }
+    }
+    return undefined;
+  }
+
+  /** Step 2 of {@link locateMessage}: load `chatId` further back until the message appears. */
+  private async walkChatFor(chatId: string, messageId: string, ref: MessageRef): Promise<Message | undefined> {
+    const chat = await this.client().getChatById(chatId);
+    // getChatById RESOLVES undefined for a chat this account cannot see — nothing to walk.
+    if (!chat) return undefined;
+    for (const limit of WwebjsMessaging.MESSAGE_SEARCH_WINDOWS) {
+      const messages = await chat.fetchMessages({ limit });
+      const found = messages.find(m => matchesRef(m, messageId, ref));
+      if (found) {
+        return found;
+      }
+      // A short page means the chat has no earlier messages to load: widening cannot find it.
+      if (messages.length < limit) {
+        break;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Resolve `chatId` and run `send` against the resolved id. If the send fails with `No LID for user`
    * — the signature of a contact whose cached/resolved id is stale (typically a `@c.us` for a contact
    * that has since migrated to `@lid`) — drop the mapping, re-resolve once, and retry only if the
@@ -346,6 +495,16 @@ export class WwebjsMessaging {
     mentions?: string[],
     options?: { linkPreview?: boolean; customPreview?: CustomLinkPreview } & Quotable,
   ): Promise<MessageResult> {
+    return this.sendText(chatId, text, mentions, options, 'any-chat');
+  }
+
+  private async sendText(
+    chatId: string,
+    text: string,
+    mentions: string[] | undefined,
+    options: ({ linkPreview?: boolean; customPreview?: CustomLinkPreview } & Quotable) | undefined,
+    quoteScope: QuoteScope,
+  ): Promise<MessageResult> {
     this.host.ensureReady();
     // wwebjs accepts neutral `<phone>@c.us` WIDs directly as mentionedJidList, so no de-normalization
     // is needed. Omit the options object entirely when none are given to keep today's send behavior.
@@ -365,7 +524,7 @@ export class WwebjsMessaging {
       linkPreview?: boolean;
       quotedMessageId?: string;
       ignoreQuoteErrors?: boolean;
-    } = this.quoteOptions(options?.quotedMessageId);
+    } = this.quoteOptions(await this.resolveQuote(chatId, options?.quotedMessageId, quoteScope));
     if (mentions?.length) sendOptions.mentions = mentions;
     if (options?.linkPreview === false) sendOptions.linkPreview = false;
 
@@ -418,6 +577,8 @@ export class WwebjsMessaging {
     this.host.ensureReady();
     this.host.ensureNotChannelRecipient(chatId);
 
+    // Before the media is fetched: a quote that cannot be found fails the send without downloading it.
+    const quotedMessageId = await this.resolveQuote(chatId, media.quotedMessageId);
     // Build the media once (a remote URL is fetched here); sendResolved may retry the send itself.
     const messageMedia = await toMessageMedia(media);
     // A nameless document reaches WA Web as `new File([blob], undefined)` and is labelled literally
@@ -434,7 +595,7 @@ export class WwebjsMessaging {
           // sendAudioAsVoice only for audio, sendMediaAsDocument only for documents;
           // {...undefined} contributes no keys.
           ...extraOptions,
-          ...this.quoteOptions(media.quotedMessageId),
+          ...this.quoteOptions(quotedMessageId),
         }),
       media.quotedMessageId,
     );
@@ -452,9 +613,10 @@ export class WwebjsMessaging {
       name: location.description || '',
       address: location.address || '',
     });
+    const quotedMessageId = await this.resolveQuote(chatId, location.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
-      to => this.client().sendMessage(to, loc, this.quoteOptions(location.quotedMessageId)),
+      to => this.client().sendMessage(to, loc, this.quoteOptions(quotedMessageId)),
       location.quotedMessageId,
     );
     return toMessageResult(msg);
@@ -466,12 +628,13 @@ export class WwebjsMessaging {
     // can't inject extra vCard fields — the previous inline build interpolated raw values.
     const vcard = buildVCard(contact);
 
+    const quotedMessageId = await this.resolveQuote(chatId, contact.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
       to =>
         this.client().sendMessage(to, vcard, {
           parseVCards: true,
-          ...this.quoteOptions(contact.quotedMessageId),
+          ...this.quoteOptions(quotedMessageId),
         }),
       contact.quotedMessageId,
     );
@@ -484,6 +647,7 @@ export class WwebjsMessaging {
     // hits the same channel crash: for a channel wwjs drops the sticker form and runs processMediaData
     // with sendToChannel, which still ends at msg.avParams() (Utils.js:518). Guard it too (#673).
     this.host.ensureNotChannelRecipient(chatId);
+    const quotedMessageId = await this.resolveQuote(chatId, media.quotedMessageId);
     // Keep the fetched content-type for a remote URL: here the mimetype selects the conversion, and
     // whatsapp-web.js returns the media unconverted once it reads as webp (Util.formatImageToWebpSticker).
     const messageMedia = await toMessageMedia(media, { trustDeclaredType: false });
@@ -493,7 +657,7 @@ export class WwebjsMessaging {
       to =>
         this.client().sendMessage(to, messageMedia, {
           sendMediaAsSticker: true,
-          ...this.quoteOptions(media.quotedMessageId),
+          ...this.quoteOptions(quotedMessageId),
           // Same options bag every other media send uses, so the library tags a sticker exactly as it
           // tags an image. Omitted when empty to leave an untagged sticker call unchanged.
           ...(media.mentions?.length ? { mentions: media.mentions } : {}),
@@ -516,46 +680,30 @@ export class WwebjsMessaging {
     // allowMultipleAnswers.
     type PollSendOptions = ConstructorParameters<typeof Poll>[2];
     const pollOptions = { allowMultipleAnswers: poll.allowMultipleAnswers === true } as PollSendOptions;
+    const quotedMessageId = await this.resolveQuote(chatId, poll.quotedMessageId);
     const msg = await this.sendResolved(
       chatId,
       to =>
         this.client().sendMessage(
           to,
           new Poll(poll.name, poll.options, pollOptions),
-          this.quoteOptions(poll.quotedMessageId),
+          this.quoteOptions(quotedMessageId),
         ),
       poll.quotedMessageId,
     );
     return toMessageResult(msg);
   }
 
+  /**
+   * A reply is a text send with a quote, so it takes the send path's quote handling whole: the quoted
+   * message is found however old it is (it used to be searched for in the last 100 messages only),
+   * and `ignoreQuoteErrors: false` keeps a quote the page still cannot resolve from going out as a
+   * loose message. `Message.reply()` would have done the same send (Message.js:463-474) but with the
+   * library's silent-unquoted default. Unlike the `send-*` routes, a reply only quotes a message of
+   * the chat it is sent to (docs/06, Quoted sends), which is what `'same-chat'` enforces.
+   */
   async replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult> {
-    this.host.ensureReady();
-    try {
-      // Find the message to quote
-      const chat = await this.client().getChatById(chatId);
-      const messages = await chat.fetchMessages({ limit: 100 });
-      const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
-
-      if (!quotedMsg) {
-        throw new MessageNotFoundError(quotedMsgId);
-      }
-
-      // Reply's send leg hits the same `No LID for user` path as a normal send for a migrated contact,
-      // so route it through sendResolved (resolve @c.us->@lid, cache, self-heal). reply(content, chatId)
-      // accepts an explicit target (#583 R1).
-      // reply(content, chatId, options) takes the same options bag as sendMessage, so a quoted send
-      // tags participants exactly as a plain one does. The options argument is omitted entirely when
-      // no tags were asked for, keeping an ordinary reply's call shape untouched (same rule as the
-      // send path).
-      const msg = await this.sendResolved(chatId, to =>
-        mentions?.length ? quotedMsg.reply(text, to, { mentions }) : quotedMsg.reply(text, to),
-      );
-      return toMessageResult(msg);
-    } catch (error) {
-      this.host.reportIfPageTransportError(error, 'replyToMessage');
-      throw error;
-    }
+    return this.sendText(chatId, text, mentions, { quotedMessageId: quotedMsgId }, 'same-chat');
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
@@ -761,42 +909,9 @@ export class WwebjsMessaging {
     return results;
   }
 
-  /**
-   * Widening fetch windows for {@link getMessageMedia}. fetchMessages loads earlier messages on
-   * demand, so each step costs more than the last; most lookups end at the first one. The ceiling
-   * matches the deep-history limit — the furthest back any other read on this gateway reaches.
-   */
-  private static readonly MESSAGE_MEDIA_SEARCH_WINDOWS = [100, 500, 2000];
-
   async getMessageMedia(chatId: string, messageId: string): Promise<IncomingMessage['media'] | undefined> {
     this.host.ensureReady();
-    const msg = await this.withPage('getMessageMedia', async () => {
-      // The page store answers by id directly when the message is already loaded — no history walk.
-      // It resolves undefined (or throws, on some WA Web builds) for one that is not, so a miss of
-      // either kind falls through to the walk rather than being reported as not-found.
-      const direct = await this.client()
-        .getMessageById(messageId)
-        .catch(() => undefined);
-      if (direct) {
-        return direct;
-      }
-      const chat = await this.client().getChatById(chatId);
-      if (!chat) {
-        throw new MessageNotFoundError(messageId, chatId);
-      }
-      for (const limit of WwebjsMessaging.MESSAGE_MEDIA_SEARCH_WINDOWS) {
-        const messages = await chat.fetchMessages({ limit });
-        const found = messages.find(m => m.id._serialized === messageId);
-        if (found) {
-          return found;
-        }
-        // A short page means the chat has no earlier messages to load: widening cannot find it.
-        if (messages.length < limit) {
-          break;
-        }
-      }
-      throw new MessageNotFoundError(messageId, chatId);
-    });
+    const msg = await this.withPage('getMessageMedia', () => this.locateMessage(chatId, messageId));
     if (!msg.hasMedia) {
       return undefined;
     }

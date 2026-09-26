@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Replies and quoted sends can quote a message however old it is on the `whatsapp-web.js` engine. `POST /messages/reply` (and the MCP `MessageReply` tool) looked for the quoted message in the chat's last 100 messages only, and every `send-*` route with `quotedMessageId` (and `MessageSendText`) needed WhatsApp Web to already have it loaded — so quoting anything older failed with `404` even though the message was in the gateway's history. The gateway now finds the message first, loading earlier messages up to the deep-history reach of 2000, and accepts its id in any shape: the current `@lid` form, the pre-migration `@c.us` form stored with older rows, or the bare hash. A quoted message that still cannot be found fails the send instead of going out unquoted, and a reply keeps refusing a message from another chat.
 - Media sending works again on the `whatsapp-web.js` engine. Every image, video, audio, document and
   media status post failed with a bare `Internal error`: whatsapp-web.js 1.34.7 spreads the WhatsApp
   Web media **model** into the outgoing message, and the model's own internals make the page throw
