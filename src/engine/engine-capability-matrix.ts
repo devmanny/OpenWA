@@ -126,10 +126,10 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
       'wwjs Chat.clearMessages() → boolean (index.d.ts:1896); the injected sendClearChat returns false for an unknown chat (Injected/Utils.js:1220); baileys chatModify({clear:true,lastMessages}, jid) (Types/Chat.d.ts:75-78) — same last-message requirement as archiveChat, so a chat with no known history resolves false',
   },
   createGroup: {
-    wwjs: { status: 'not-available', rootCause: 'library-limitation' },
+    wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      'baileys groupCreate(subject, participants) → GroupMetadata (Socket/groups.d.ts). wwjs Client.createGroup exists and is typed Promise<CreateGroupResult | string> (index.d.ts) but its injected evaluate reaches a WhatsApp Web internal that no longer exposes findImpl (Client.js:2325) — measured live on TWO builds, 2.3000.1044858477-alpha auto-resolved and 2.3000.1044770897-alpha pinned, both TypeError "this.findImpl is not a function" reaching the caller as a bare 500. Bare and @c.us-qualified participant ids fail identically, so the id shape is not the variable, and varying the build is what separates this from registry pin drift. findImpl appears in neither the installed Client.js nor any OpenWA patcher, so it is the page\'s, not the library\'s, and cannot be patched around. Baileys creates groups normally on the same account',
+      'baileys groupCreate(subject, participants) → GroupMetadata. wwjs Client.createGroup → CreateGroupResult | string, after ensureGroupCreateModule bootloads WAWebNewGroupFlow.react when WAWebGroupCreateJob is absent. Verified live on 2026-09-18 with Web 2.3000.1047824257-alpha: created id and both participants read back, announce=false. Normalizes both Wid serialization names; creation never auto-retries and counts are read separately from confirmed metadata',
   },
   deleteContact: {
     wwjs: { status: 'supported' },
@@ -225,6 +225,12 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     baileys: { status: 'not-available', rootCause: 'library-limitation' },
     evidence:
       'baileys no getLabel/fetchLabel in lib/**/*.d.ts; chats.d.ts:69-73 + business.d.ts:162-166 expose ONLY writes; derivable only from an app-state-sync event cache; wwjs Client.getLabels (Client.js:2760)',
+  },
+  getMessageMedia: {
+    wwjs: { status: 'supported' },
+    baileys: { status: 'not-available', rootCause: 'library-limitation' },
+    evidence:
+      'wwjs Client.getMessageById (index.d.ts:115) with a widening Chat.fetchMessages walk as fallback, then Message.downloadMedia; baileys shares the getChatHistory root cause — no synchronous per-chat fetch, so a message the adapter did not see arrive is unreachable',
   },
   getMessageReactions: {
     wwjs: { status: 'supported' },

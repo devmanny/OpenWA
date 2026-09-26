@@ -12,9 +12,9 @@ import type { Response } from 'express';
  * controller passed every suite in the repo.
  */
 describe('MessageController — stored media download', () => {
-  const getChatMedia = jest.fn().mockResolvedValue({ buffer: Buffer.from('GIF89a'), mimetype: 'image/gif' });
+  const downloadMessageMedia = jest.fn().mockResolvedValue({ buffer: Buffer.from('GIF89a'), mimetype: 'image/gif' });
   const controller = new MessageController(
-    { getChatMedia } as unknown as MessageService,
+    { downloadMessageMedia } as unknown as MessageService,
     {} as unknown as BulkMessageService,
   );
 

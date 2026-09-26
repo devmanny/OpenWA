@@ -82,7 +82,9 @@ export const AUTOSTART_THROTTLE_MS = 2_000;
 /**
  * Statuses that assert an engine is running somewhere. The boot reset clears them for every row this
  * node may claim; markLapsedDisconnected clears them for a row whose holder never came back. FAILED
- * and CREATED stay out of both: an operator has to see them.
+ * and CREATED stay out of that reset because neither status asserts a live engine. Authenticated
+ * FAILED sessions are handled separately by the auto-start scan so transient failures recover after
+ * a process restart.
  */
 const ACTIVE_STATUSES = [
   SessionStatus.READY,
@@ -91,6 +93,9 @@ const ACTIVE_STATUSES = [
   SessionStatus.AUTHENTICATING,
   SessionStatus.ACTION_REQUIRED,
 ];
+
+/** Persisted states from which a previously linked session can be recovered during boot. */
+const AUTOSTART_STATUSES = [SessionStatus.DISCONNECTED, SessionStatus.FAILED];
 
 /**
  * The session-record API: CRUD over the sessions table, aggregate stats, and the thin engine query
@@ -212,7 +217,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // duplicated work.
     const claimable = this.ownership?.claimableWhere() ?? [{}];
     const sessions = await this.sessionRepository.find({
-      where: claimable.map(clause => ({ ...clause, phone: Not(IsNull()), status: SessionStatus.DISCONNECTED })),
+      where: claimable.map(clause => ({ ...clause, phone: Not(IsNull()), status: In(AUTOSTART_STATUSES) })),
     });
 
     if (sessions.length === 0) return;

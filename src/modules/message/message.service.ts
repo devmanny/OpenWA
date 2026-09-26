@@ -425,11 +425,24 @@ export class MessageService implements PluginMessagePort {
     chatId: string,
     messageId: string,
   ): Promise<{ buffer: Buffer; mimetype: string }> {
+    const { buffer, mimetype } = await this.readStoredMedia(sessionId, chatId, messageId);
+    return { buffer, mimetype: inertMimetype(mimetype) };
+  }
+
+  /**
+   * The stored copy with the mimetype exactly as the sender declared it. Callers that put bytes on
+   * the API origin must go through {@link getChatMedia}, which reduces it to the inert set.
+   */
+  private async readStoredMedia(
+    sessionId: string,
+    chatId: string,
+    messageId: string,
+  ): Promise<{ buffer: Buffer; mimetype: string; filename?: string }> {
     const chatIds = this.resolveJidCandidates(chatId);
     const media = await this.chatMediaArchive?.getMedia(sessionId, chatIds, messageId);
     if (media && this.storageService) {
       try {
-        return { buffer: await this.storageService.getFile(media.path), mimetype: inertMimetype(media.mimetype) };
+        return { buffer: await this.storageService.getFile(media.path), mimetype: media.mimetype };
       } catch (error) {
         // The row outlived its file: the retention purge (or a concurrent delete) removed it
         // between the DB read and this read. Not a server fault — try the inline copy instead.
@@ -445,7 +458,9 @@ export class MessageService implements PluginMessagePort {
     const row = await this.messageRepository.findOne({
       where: { sessionId, chatId: In(chatIds), waMessageId: messageId },
     });
-    const inline = (row?.metadata as { media?: { data?: unknown; mimetype?: unknown; omitted?: unknown } })?.media;
+    const inline = (
+      row?.metadata as { media?: { data?: unknown; mimetype?: unknown; omitted?: unknown; filename?: unknown } }
+    )?.media;
     if (
       !inline ||
       inline.omitted ||
@@ -460,7 +475,64 @@ export class MessageService implements PluginMessagePort {
     ) {
       throw new NotFoundException('No media stored for this message');
     }
-    return { buffer: Buffer.from(inline.data, 'base64'), mimetype: inertMimetype(inline.mimetype) };
+    return {
+      buffer: Buffer.from(inline.data, 'base64'),
+      mimetype: inline.mimetype,
+      filename: typeof inline.filename === 'string' && inline.filename ? inline.filename : undefined,
+    };
+  }
+
+  /**
+   * A message's media, from wherever it can be had: the stored copy first (no WhatsApp round trip),
+   * else a live download of that one message. The live leg is what reaches an attachment the
+   * gateway never stored — it arrived before the session existed, was over the cap at the time, or
+   * downloads were disabled — and, unlike getChatHistory's `includeMedia`, it is not limited to the
+   * newest 100 messages. Only a stored-copy 404 falls through; any other failure is a real fault.
+   */
+  async downloadMessageMedia(
+    sessionId: string,
+    chatId: string,
+    messageId: string,
+  ): Promise<{
+    buffer: Buffer;
+    /** Reduced to the inert set — the only one safe to serve as a Content-Type. */
+    mimetype: string;
+    /** As the sender declared it (e.g. application/pdf). Metadata only: never serve it as a Content-Type. */
+    declaredMimetype: string;
+    filename?: string;
+    source: 'stored' | 'live';
+  }> {
+    try {
+      const stored = await this.readStoredMedia(sessionId, chatId, messageId);
+      return {
+        ...stored,
+        mimetype: inertMimetype(stored.mimetype),
+        declaredMimetype: stored.mimetype,
+        source: 'stored',
+      };
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) {
+        throw error;
+      }
+    }
+    const engine = this.getEngine(sessionId);
+    const media = await engine.getMessageMedia(chatId, messageId);
+    if (!media) {
+      throw new NotFoundException('This message carries no media');
+    }
+    if (media.omitted || !media.data) {
+      throw new NotFoundException(
+        'Media could not be downloaded: it is over MEDIA_DOWNLOAD_MAX_BYTES, downloads are disabled, ' +
+          'the download timed out, or WhatsApp no longer holds the file',
+      );
+    }
+    return {
+      buffer: Buffer.from(media.data, 'base64'),
+      mimetype: inertMimetype(media.mimetype),
+      declaredMimetype: media.mimetype,
+      filename: media.filename,
+      source: 'live',
+    };
   }
 
   /** Maximum messages a single getChatHistory call may request from the engine. */

@@ -494,7 +494,7 @@ export class MessageController {
   // Three path segments, so it never collides with `:chatId/history` (two) regardless of
   // declaration order — Nest/Express match on segment count first.
   @Get(':chatId/:messageId/media')
-  @ApiOperation({ summary: 'Download a message’s stored media' })
+  @ApiOperation({ summary: 'Download a message’s media (stored copy, else live from WhatsApp)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'chatId', description: 'Chat ID containing the message' })
   @ApiParam({ name: 'messageId', description: 'WhatsApp message ID whose media to download' })
@@ -518,7 +518,9 @@ export class MessageController {
     @Param('messageId') messageId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
-    const { buffer, mimetype } = await this.messageService.getChatMedia(sessionId, chatId, messageId);
+    // Stored copy first, else a live download of this one message — so an attachment the gateway
+    // never stored (it predates the session, or sits beyond the history media window) still downloads.
+    const { buffer, mimetype } = await this.messageService.downloadMessageMedia(sessionId, chatId, messageId);
     // attachment + nosniff together: the mimetype is already reduced to an inert set, and forcing a
     // download means even a mistake there cannot render as active content on the API origin. The
     // dashboard renders chat media from the inline copy, so nothing depends on inline display here.

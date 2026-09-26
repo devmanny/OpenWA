@@ -761,6 +761,48 @@ export class WwebjsMessaging {
     return results;
   }
 
+  /**
+   * Widening fetch windows for {@link getMessageMedia}. fetchMessages loads earlier messages on
+   * demand, so each step costs more than the last; most lookups end at the first one. The ceiling
+   * matches the deep-history limit — the furthest back any other read on this gateway reaches.
+   */
+  private static readonly MESSAGE_MEDIA_SEARCH_WINDOWS = [100, 500, 2000];
+
+  async getMessageMedia(chatId: string, messageId: string): Promise<IncomingMessage['media'] | undefined> {
+    this.host.ensureReady();
+    const msg = await this.withPage('getMessageMedia', async () => {
+      // The page store answers by id directly when the message is already loaded — no history walk.
+      // It resolves undefined (or throws, on some WA Web builds) for one that is not, so a miss of
+      // either kind falls through to the walk rather than being reported as not-found.
+      const direct = await this.client()
+        .getMessageById(messageId)
+        .catch(() => undefined);
+      if (direct) {
+        return direct;
+      }
+      const chat = await this.client().getChatById(chatId);
+      if (!chat) {
+        throw new MessageNotFoundError(messageId, chatId);
+      }
+      for (const limit of WwebjsMessaging.MESSAGE_MEDIA_SEARCH_WINDOWS) {
+        const messages = await chat.fetchMessages({ limit });
+        const found = messages.find(m => m.id._serialized === messageId);
+        if (found) {
+          return found;
+        }
+        // A short page means the chat has no earlier messages to load: widening cannot find it.
+        if (messages.length < limit) {
+          break;
+        }
+      }
+      throw new MessageNotFoundError(messageId, chatId);
+    });
+    if (!msg.hasMedia) {
+      return undefined;
+    }
+    return this.host.capInboundMediaFor(msg);
+  }
+
   async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
     this.host.ensureReady();
     // NOTE: do NOT resolve chatId to @lid here — delete operates on the found message's own key, not

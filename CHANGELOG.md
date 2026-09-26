@@ -11,9 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inbound commerce messages arrive typed `order` and `product` instead of a bodyless `unknown`, on both engines, and are accepted by webhook and automation-rule message-type filters.
 - The Python SDK's `ChatHistoryMessage` carries the commerce `order` and `product` blocks, with required fields and enums matching the contract.
+- A message's media can be downloaded however old it is. `GET /messages/:chatId/:messageId/media` falls back to a live download of that one message when the gateway holds no stored copy, and the new MCP `MessageDownloadMedia` tool returns the bytes as base64 with the sender-declared mimetype and filename. This reaches attachments that arrived before the session existed or sit beyond the 100-message window of `history?includeMedia=true`, and fixes the dashboard attachment button for them (`whatsapp-web.js` only).
 
 ### Fixed
 
+- Media sending works again on the `whatsapp-web.js` engine. Every image, video, audio, document and
+  media status post failed with a bare `Internal error`: whatsapp-web.js 1.34.7 spreads the WhatsApp
+  Web media **model** into the outgoing message, and the model's own internals make the page throw
+  `Data passed to getter must include an id property` before the send is handed off. A new
+  install-time patcher (`scripts/patch-wwebjs-media-model-spread.js`) sends the serialized media data
+  instead, keeping captions and the sticker path intact. Text sends and stickers were never affected,
+  which made the failure look like a per-route bug.
 - The Baileys live path drops contentless protocol traffic (sender-key distributions, message-history notices) instead of delivering it as a bodyless `unknown` `message.received`, matching what the history path already does ([#1568](https://github.com/rmyndharis/OpenWA/issues/1568)). Thanks @berodcdev for the report.
 - The group invite-code read, over REST or the MCP `GroupGetInviteCode` tool, requires the OPERATOR role; the code is a transferable join capability, so a VIEWER key can no longer extract it.
 - A Baileys reconnect loop is observable: `lastError` on the session, a `session.reconnect_loop` webhook every fifth attempt, and reconnect metrics ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.

@@ -118,6 +118,33 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         message.getChatHistory(input.sessionId, input.chatId, input.limit, input.includeMedia, input.deep),
     }),
     defineTool({
+      name: 'MessageDownloadMedia',
+      description:
+        'Download the media (document, image, video, audio, sticker) of ONE message as base64. Serves ' +
+        'the stored copy when the gateway has it, else downloads it live from WhatsApp — so it works ' +
+        'for a message of any age, including one that arrived before the gateway started or that ' +
+        'MessageHistory lists without media. Take chatId and messageId (the `id` field) from ' +
+        'MessageHistory or MessageList (`waMessageId`).',
+      tier: 'read',
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().min(1).describe('Chat JID containing the message'),
+        messageId: z.string().min(1).describe('Serialized WhatsApp message id whose media to download'),
+      }),
+      handler: async input => {
+        const media = await message.downloadMessageMedia(input.sessionId, input.chatId, input.messageId);
+        return {
+          messageId: input.messageId,
+          mimetype: media.declaredMimetype,
+          filename: media.filename,
+          sizeBytes: media.buffer.length,
+          source: media.source,
+          data: media.buffer.toString('base64'),
+        };
+      },
+    }),
+    defineTool({
       name: 'MessageGetReactions',
       description: 'Get reactions for a specific message, including which contacts sent which emoji.',
       tier: 'read',
@@ -444,6 +471,56 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         message
           .reactToMessage(input.sessionId, { chatId: input.chatId, messageId: input.messageId, emoji: input.emoji })
           .then(() => ({ success: true })),
+    }),
+    defineTool({
+      name: 'MessageDelete',
+      description:
+        'Delete a message. By default it is deleted for everyone (revoked on every device), which cannot be ' +
+        'undone; WhatsApp only allows that for a limited time after sending. Requires OPERATOR role.',
+      tier: 'write',
+      destructive: true,
+      requiredRole: ApiKeyRole.OPERATOR,
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().describe('Chat JID containing the message'),
+        messageId: z.string().describe('ID of the message to delete'),
+        forEveryone: z
+          .boolean()
+          .optional()
+          .describe('Delete for everyone (default true). Set false to delete only on this account.'),
+      }),
+      handler: input =>
+        message
+          .deleteMessage(input.sessionId, {
+            chatId: input.chatId,
+            messageId: input.messageId,
+            forEveryone: input.forEveryone,
+          })
+          .then(() => ({ success: true })),
+    }),
+    defineTool({
+      name: 'MessageEdit',
+      description:
+        'Replace the text of a message this account sent. WhatsApp only allows editing text messages for a ' +
+        'short time after sending. Mentions are re-applied, not preserved: pass them again. Requires OPERATOR role.',
+      tier: 'write',
+      requiredRole: ApiKeyRole.OPERATOR,
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().describe('Chat JID containing the message'),
+        messageId: z.string().describe('ID of the message to edit'),
+        body: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('New text body for the message'),
+        mentions: mentionsSchema,
+      }),
+      handler: input =>
+        message.editMessage(input.sessionId, {
+          chatId: input.chatId,
+          messageId: input.messageId,
+          body: input.body,
+          mentions: input.mentions,
+        }),
     }),
   ];
 }

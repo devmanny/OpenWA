@@ -171,6 +171,30 @@ describe('SendPacingService', () => {
     });
   });
 
+  describe('the hourly cap window', () => {
+    it('counts from the start of the current UTC hour', async () => {
+      const { service, count } = build({ warmupSchedule: [320], capWindow: 'hour' }, 0);
+
+      await service.assertSendAllowed('s1');
+
+      const [[options]] = count.mock.calls as [[{ where: { createdAt: { value: Date } } }]];
+      const since = options.where.createdAt.value;
+      expect(since.getTime() % 3_600_000).toBe(0);
+      expect(Date.now() - since.getTime()).toBeLessThan(3_600_000);
+    });
+
+    it('refuses at the allowance and names the hourly window', async () => {
+      const { service } = build({ warmupSchedule: [320], capWindow: 'hour' }, 320);
+
+      const body = await expectPacingRefusal(service.assertSendAllowed('s1'));
+
+      expect(body.message).toContain('Hourly send allowance of 320');
+      // Until the next UTC hour, not the next midnight.
+      expect(body.retryAfterSeconds).toBeGreaterThan(0);
+      expect(body.retryAfterSeconds).toBeLessThanOrEqual(3_600);
+    });
+  });
+
   describe('the failure-streak breaker', () => {
     it('stays closed below the threshold', async () => {
       const { service } = build({ breakerThreshold: 3, warmupSchedule: [1000] });
@@ -265,6 +289,12 @@ describe('computeSendPacingConfig', () => {
     expect(computeSendPacingConfig({}).enabled).toBe(false);
     expect(computeSendPacingConfig({ SEND_PACING_ENABLED: 'TRUE' }).enabled).toBe(false);
     expect(computeSendPacingConfig({ SEND_PACING_ENABLED: 'true' }).enabled).toBe(true);
+  });
+
+  it('keeps the daily window unless the hourly one is spelled exactly', () => {
+    expect(computeSendPacingConfig({}).capWindow).toBe('day');
+    expect(computeSendPacingConfig({ SEND_PACING_CAP_WINDOW: 'hour' }).capWindow).toBe('hour');
+    expect(computeSendPacingConfig({ SEND_PACING_CAP_WINDOW: 'hourly' }).capWindow).toBe('day');
   });
 
   it('parses a warm-up schedule', () => {

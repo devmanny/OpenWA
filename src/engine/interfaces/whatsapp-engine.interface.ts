@@ -1057,6 +1057,16 @@ export interface ChatHistoryCapability {
     mediaMaxBytes?: number,
     signal?: AbortSignal,
   ): Promise<IncomingMessage[]>;
+
+  /**
+   * Download ONE message's media live from WhatsApp, however old the message is. This is the route
+   * to an attachment the gateway never stored — one that arrived before the session existed, or
+   * sits deeper than the 100-message `includeMedia` window of getChatHistory. The download runs
+   * through the same size pre-gate, limiter and timeout as inbound media, so the envelope may carry
+   * the `omitted` marker instead of bytes. Resolves undefined when the message has no media; throws
+   * MessageNotFoundError when the message cannot be found in the chat.
+   */
+  getMessageMedia(chatId: string, messageId: string): Promise<IncomingMessage['media'] | undefined>;
 }
 
 /**

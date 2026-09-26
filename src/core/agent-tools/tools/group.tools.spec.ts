@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { invokeTool } from '../tool-invoker';
 import { groupTools } from './group.tools';
 import type { GroupService } from '../../../modules/group/group.service';
@@ -12,6 +12,57 @@ function makeAuth(): Pick<AuthService, 'validateApiKey' | 'hasPermission'> {
     hasPermission: jest.fn().mockReturnValue(true),
   };
 }
+
+describe('GroupSetPicture', () => {
+  const input = { sessionId: 's1', groupId: '120363@g.us', base64: 'aW1hZ2U=', mimetype: 'image/png' };
+  const setup = () => {
+    const setGroupPicture = jest.fn().mockResolvedValue(undefined);
+    const tool = groupTools({ setGroupPicture } as unknown as GroupService).find(t => t.name === 'GroupSetPicture')!;
+    return { setGroupPicture, tool };
+  };
+
+  it('uses the session-scoped picture service and only confirms after it succeeds', async () => {
+    const { setGroupPicture, tool } = setup();
+    const auth = makeAuth();
+    await expect(invokeTool(tool, input, 'key', auth as unknown as AuthService)).resolves.toEqual({
+      success: true,
+      message: 'Group picture updated',
+    });
+    expect(auth.validateApiKey).toHaveBeenCalledWith('key', undefined, 's1');
+    expect(setGroupPicture).toHaveBeenCalledWith('s1', '120363@g.us', {
+      url: undefined,
+      base64: input.base64,
+      mimetype: 'image/png',
+    });
+    setGroupPicture.mockRejectedValue(new ForbiddenException('admin rights required'));
+    await expect(invokeTool(tool, input, 'key', auth as unknown as AuthService)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('refuses a below-role key before touching the group', async () => {
+    const { setGroupPicture, tool } = setup();
+    const auth = makeAuth();
+    (auth.hasPermission as jest.Mock).mockReturnValue(false);
+    await expect(invokeTool(tool, input, 'key', auth as unknown as AuthService)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(auth.hasPermission).toHaveBeenCalledWith(expect.anything(), ApiKeyRole.OPERATOR);
+    expect(setGroupPicture).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...input, mimetype: 'text/plain' },
+    { ...input, url: 'file:///etc/passwd' },
+    { ...input, base64: null },
+  ])('rejects invalid media before the service: %j', async invalid => {
+    const { setGroupPicture, tool } = setup();
+    await expect(invokeTool(tool, invalid, 'key', makeAuth() as unknown as AuthService)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(setGroupPicture).not.toHaveBeenCalled();
+  });
+});
 
 describe('GroupAddParticipants', () => {
   it('returns the engine per-participant results instead of a blanket success', async () => {

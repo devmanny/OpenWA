@@ -964,6 +964,81 @@ describe('MessageService', () => {
   // The budget is only worth anything if the read path actually applies it: the wiring is one line and
   // would vanish silently. This drives getMessages through a faked query builder and asserts the
   // response is bounded, not just that the helper exists.
+  describe('downloadMessageMedia', () => {
+    const build = (archive: unknown, store: unknown): MessageService =>
+      new MessageService(
+        repository as Repository<Message>,
+        engines,
+        messageProjector as unknown as MessageProjector,
+        hookManager as HookManager,
+        lidMappingStore as unknown as LidMappingStoreService,
+        inertPacing(),
+        {} as MessageSendService,
+        archive as never,
+        store as never,
+      );
+    const nothingStored = () => build({ getMedia: jest.fn().mockResolvedValue(null) }, { getFile: jest.fn() });
+    const liveEngine = (getMessageMedia: jest.Mock) =>
+      engines.set('sess-1', { ...mockEngine, getMessageMedia } as unknown as IWhatsAppEngine);
+
+    it('serves the stored copy without touching WhatsApp, keeping the declared type as metadata', async () => {
+      const getMessageMedia = jest.fn();
+      liveEngine(getMessageMedia);
+      const svc = build(
+        { getMedia: jest.fn().mockResolvedValue({ path: 'chat-media/sess-1/abc.bin', mimetype: 'application/pdf' }) },
+        { getFile: jest.fn().mockResolvedValue(Buffer.from('BYTES')) },
+      );
+      await expect(svc.downloadMessageMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+        buffer: Buffer.from('BYTES'),
+        mimetype: 'application/octet-stream',
+        declaredMimetype: 'application/pdf',
+        filename: undefined,
+        source: 'stored',
+      });
+      expect(getMessageMedia).not.toHaveBeenCalled();
+    });
+
+    it('downloads live when nothing is stored — the message predates the session', async () => {
+      const getMessageMedia = jest.fn().mockResolvedValue({
+        mimetype: 'application/pdf',
+        filename: 'invoice.pdf',
+        data: Buffer.from('%PDF').toString('base64'),
+      });
+      liveEngine(getMessageMedia);
+      await expect(nothingStored().downloadMessageMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+        buffer: Buffer.from('%PDF'),
+        mimetype: 'application/octet-stream',
+        declaredMimetype: 'application/pdf',
+        filename: 'invoice.pdf',
+        source: 'live',
+      });
+      expect(getMessageMedia).toHaveBeenCalledWith('c@c.us', 'wa-1');
+    });
+
+    it('404s when the message carries no media', async () => {
+      liveEngine(jest.fn().mockResolvedValue(undefined));
+      await expect(nothingStored().downloadMessageMedia('sess-1', 'c@c.us', 'wa-1')).rejects.toThrow(
+        'This message carries no media',
+      );
+    });
+
+    it('404s rather than returning an empty file when the live download was omitted', async () => {
+      liveEngine(jest.fn().mockResolvedValue({ mimetype: 'video/mp4', omitted: true, sizeBytes: 99 }));
+      await expect(nothingStored().downloadMessageMedia('sess-1', 'c@c.us', 'wa-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('does not mask a storage fault as a reason to go live', async () => {
+      const getMessageMedia = jest.fn();
+      liveEngine(getMessageMedia);
+      const svc = build(
+        { getMedia: jest.fn().mockResolvedValue({ path: 'p', mimetype: 'image/png' }) },
+        { getFile: jest.fn().mockRejectedValue(new Error('S3 500')) },
+      );
+      await expect(svc.downloadMessageMedia('sess-1', 'c@c.us', 'wa-1')).rejects.toThrow('S3 500');
+      expect(getMessageMedia).not.toHaveBeenCalled();
+    });
+  });
+
   describe('MessageService.getMessages bounds its inline media', () => {
     it('applies the budget to the rows it returns', async () => {
       const prev = process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES;
