@@ -230,6 +230,16 @@ describe('DockerService.onModuleInit', () => {
     expect(docker.createContainer).toHaveBeenCalledWith(expect.objectContaining({ name: 'openwa-redis' }));
   });
 
+  it('bounds the availability probe without imposing its timeout on image pulls', async () => {
+    DockerMock.mockImplementation(() => happyDocker());
+    const service = new DockerService();
+
+    await service.onModuleInit();
+
+    expect(DockerMock).toHaveBeenNthCalledWith(1, { socketPath: '/var/run/docker.sock', timeout: 5000 });
+    expect(DockerMock).toHaveBeenNthCalledWith(2, { socketPath: '/var/run/docker.sock' });
+  });
+
   it('logs a warning but still resolves when bootstrap orchestration fails', async () => {
     process.env.REDIS_BUILTIN = 'true';
     DockerMock.mockImplementation(() => ({

@@ -77,8 +77,13 @@ export class DockerService implements OnModuleInit {
 
   private async initializeDocker(): Promise<void> {
     try {
-      this.docker = new Docker(this.buildDockerOptions());
-      await this.docker.ping();
+      // Docker Desktop can leave its socket open while the daemon is unresponsive. Bound
+      // the probe so an optional integration cannot keep the entire API from listening.
+      // Use a separate client so long-running image pulls keep their existing time budget.
+      const options = this.buildDockerOptions();
+      const probe = new Docker({ ...options, timeout: 5000 });
+      await probe.ping();
+      this.docker = new Docker(options);
       this.isAvailable = true;
       this.logger.log('Docker API connected successfully');
     } catch (error) {
