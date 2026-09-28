@@ -16,6 +16,10 @@ import {
   CONTACT_NUMBER_MAX_LENGTH,
   LOCATION_TEXT_MAX_LENGTH,
   REACTION_EMOJI_MAX_LENGTH,
+  POLL_NAME_MAX_LENGTH,
+  POLL_OPTIONS_MIN,
+  POLL_OPTIONS_MAX,
+  POLL_OPTION_TEXT_MAX_LENGTH,
 } from '../../../modules/message/dto/message-actions.dto';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 
@@ -361,6 +365,36 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
           chatId: input.chatId,
           contactName: input.contactName,
           contactNumber: input.contactNumber,
+          quotedMessageId: input.quotedMessageId,
+        }),
+    }),
+    defineTool({
+      name: 'MessageSendPoll',
+      description: 'Send a single- or multiple-choice poll message. Requires OPERATOR role.',
+      tier: 'write',
+      requiredRole: ApiKeyRole.OPERATOR,
+      sessionScoped: true,
+      inputSchema: z.object({
+        sessionId,
+        chatId: z.string().min(1).describe('Chat JID'),
+        name: z.string().min(1).max(POLL_NAME_MAX_LENGTH).describe('Poll question / title'),
+        options: z
+          .array(z.string().min(1).max(POLL_OPTION_TEXT_MAX_LENGTH))
+          .min(POLL_OPTIONS_MIN)
+          .max(POLL_OPTIONS_MAX)
+          .describe(`Options to vote on (WhatsApp allows between ${POLL_OPTIONS_MIN} and ${POLL_OPTIONS_MAX})`),
+        allowMultipleAnswers: z
+          .boolean()
+          .optional()
+          .describe('Allow voters to pick several options (default single choice)'),
+        quotedMessageId: quotedMessageIdSchema,
+      }),
+      handler: input =>
+        message.sendPoll(input.sessionId, {
+          chatId: input.chatId,
+          name: input.name,
+          options: input.options,
+          allowMultipleAnswers: input.allowMultipleAnswers,
           quotedMessageId: input.quotedMessageId,
         }),
     }),

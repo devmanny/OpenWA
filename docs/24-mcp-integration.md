@@ -14,7 +14,7 @@
 | **Tool registry (`ToolDescriptor`)**         | ✅ Implemented | `src/core/agent-tools/tool-descriptor.ts`            |
 | **Tool invoker (auth → validate → service)** | ✅ Implemented | `src/core/agent-tools/tool-invoker.ts`               |
 | **Registry service**                         | ✅ Implemented | `src/core/agent-tools/tool-registry.service.ts`      |
-| **Curated tool tables (55 tools)**           | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
+| **Curated tool tables (56 tools)**           | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
 | **MCP transport adapter**                    | ✅ Implemented | `src/modules/mcp/mcp.server.ts`                      |
 | **Opt-in module gate**                       | ✅ Implemented | `src/modules/mcp/mcp.module.ts`, `src/app.module.ts` |
 | **Per-key rate limiter**                     | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |

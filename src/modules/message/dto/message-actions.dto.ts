@@ -37,6 +37,10 @@ export const LOCATION_TEXT_MAX_LENGTH = 1024;
 export const CONTACT_NAME_MAX_LENGTH = 255;
 export const CONTACT_NUMBER_MAX_LENGTH = 30;
 export const REACTION_EMOJI_MAX_LENGTH = 32;
+export const POLL_NAME_MAX_LENGTH = 255;
+export const POLL_OPTIONS_MIN = 2;
+export const POLL_OPTIONS_MAX = 12;
+export const POLL_OPTION_TEXT_MAX_LENGTH = 100;
 
 export class SendLocationDto {
   @ApiProperty({ description: 'Chat ID (e.g. 628123456789@c.us)' })
@@ -104,25 +108,29 @@ export class SendPollDto {
   @IsNotEmpty()
   chatId!: string;
 
-  @ApiProperty({ description: 'Poll question / title', maxLength: 255, example: 'Where should we meet?' })
+  @ApiProperty({
+    description: 'Poll question / title',
+    maxLength: POLL_NAME_MAX_LENGTH,
+    example: 'Where should we meet?',
+  })
   @IsString()
   @IsNotEmpty()
-  @MaxLength(255)
+  @MaxLength(POLL_NAME_MAX_LENGTH)
   name!: string;
 
   // WhatsApp itself caps polls at 12 options and ~100 chars per option; validating here keeps the
   // failure a clean 400 instead of an engine error deep in the send path.
   @ApiProperty({
-    description: 'Options to vote on (WhatsApp allows between 2 and 12)',
+    description: `Options to vote on (WhatsApp allows between ${POLL_OPTIONS_MIN} and ${POLL_OPTIONS_MAX})`,
     type: [String],
     example: ['Park', 'Beach', 'Downtown'],
   })
   @IsArray()
-  @ArrayMinSize(2)
-  @ArrayMaxSize(12)
+  @ArrayMinSize(POLL_OPTIONS_MIN)
+  @ArrayMaxSize(POLL_OPTIONS_MAX)
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
-  @MaxLength(100, { each: true })
+  @MaxLength(POLL_OPTION_TEXT_MAX_LENGTH, { each: true })
   options!: string[];
 
   @ApiPropertyOptional({ description: 'Allow voters to pick several options (default single choice)' })

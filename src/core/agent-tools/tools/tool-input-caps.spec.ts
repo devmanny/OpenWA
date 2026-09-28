@@ -12,10 +12,13 @@ import {
   CONTACT_NUMBER_MAX_LENGTH,
   LOCATION_TEXT_MAX_LENGTH,
   REACTION_EMOJI_MAX_LENGTH,
+  POLL_NAME_MAX_LENGTH,
+  POLL_OPTIONS_MAX,
   ReactMessageDto,
   ReplyMessageDto,
   SendContactDto,
   SendLocationDto,
+  SendPollDto,
 } from '../../../modules/message/dto/message-actions.dto';
 import {
   CreateGroupDto,
@@ -95,6 +98,15 @@ const CASES: CapCase[] = [
     dtoPayload: { chatId: 'x@c.us', contactName: 'Alice', contactNumber: '628123456789' },
   },
   {
+    label: 'MessageSendPoll.name ↔ SendPollDto.name',
+    toolName: 'MessageSendPoll',
+    field: 'name',
+    cap: POLL_NAME_MAX_LENGTH,
+    toolInput: { sessionId: 's1', chatId: 'x@c.us', options: ['Park', 'Beach'] },
+    dtoClass: SendPollDto,
+    dtoPayload: { chatId: 'x@c.us', options: ['Park', 'Beach'] },
+  },
+  {
     label: 'MessageReply.text ↔ ReplyMessageDto.text',
     toolName: 'MessageReply',
     field: 'text',
@@ -172,6 +184,15 @@ const PARTICIPANT_CASES: CapCase[] = [
     toolInput: { sessionId: 's1', chatId: '120363@g.us', text: 'hi' },
     dtoClass: SendTextMessageDto,
     dtoPayload: { chatId: '120363@g.us', text: 'hi' },
+  },
+  {
+    label: 'MessageSendPoll.options ↔ SendPollDto.options',
+    toolName: 'MessageSendPoll',
+    field: 'options',
+    cap: POLL_OPTIONS_MAX,
+    toolInput: { sessionId: 's1', chatId: 'x@c.us', name: 'Where should we meet?' },
+    dtoClass: SendPollDto,
+    dtoPayload: { chatId: 'x@c.us', name: 'Where should we meet?' },
   },
 ];
 

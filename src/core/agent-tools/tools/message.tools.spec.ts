@@ -238,6 +238,23 @@ describe('messageTools', () => {
     expect(out).toEqual({ id: 'm1' });
   });
 
+  it('MessageSendPoll delegates to sendPoll', async () => {
+    const sendPoll = jest.fn().mockResolvedValue({ id: 'm1' });
+    const tools = makeTools({ sendPoll } as unknown as MessageService);
+    const out = await run(tools.get('MessageSendPoll')!, {
+      sessionId: 's1',
+      chatId: '628111@c.us',
+      name: 'Where should we meet?',
+      options: ['Park', 'Beach'],
+    });
+    expect(sendPoll).toHaveBeenCalledWith('s1', {
+      chatId: '628111@c.us',
+      name: 'Where should we meet?',
+      options: ['Park', 'Beach'],
+    });
+    expect(out).toEqual({ id: 'm1' });
+  });
+
   it('MessageSendSticker delegates to sendSticker with the media fields', async () => {
     const sendSticker = jest.fn().mockResolvedValue({ id: 'm1' });
     const tools = makeTools({ sendSticker } as unknown as MessageService);

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A message's media can be downloaded however old it is. `GET /messages/:chatId/:messageId/media` falls back to a live download of that one message when the gateway holds no stored copy, and the new MCP `MessageDownloadMedia` tool returns the bytes as base64 with the sender-declared mimetype and filename. This reaches attachments that arrived before the session existed or sit beyond the 100-message window of `history?includeMedia=true`, and fixes the dashboard attachment button for them (`whatsapp-web.js` only).
 - The MCP surface gains `MessageDelete`, `MessageEdit` and `GroupSetPicture`, each OPERATOR-only and session-scoped.
+- The MCP surface gains `MessageSendPoll`, OPERATOR-only and session-scoped, mirroring the REST `POST /messages/send-poll` route already implemented on both engines.
 - `createGroup` works on the `whatsapp-web.js` engine: the gateway loads WhatsApp Web's group-creation module before the call instead of answering `501`. Creation is never retried; if the response is lost, check the existing groups before trying again.
 - `SEND_PACING_CAP_WINDOW=hour` counts the send-pacing warm-up allowance per UTC hour instead of per UTC day. The cold-reachout cap stays daily.
 

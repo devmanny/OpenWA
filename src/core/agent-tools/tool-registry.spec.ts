@@ -60,6 +60,7 @@ describe('v1 tool surface snapshot', () => {
       'MessageSendDocument',
       'MessageSendLocation',
       'MessageSendContact',
+      'MessageSendPoll',
       'MessageSendSticker',
       'MessageSendTemplate',
       'MessageReply',
@@ -100,6 +101,6 @@ describe('v1 tool surface snapshot', () => {
     const actualNames = [...allAgentTools({} as never)].map(t => t.name).sort();
 
     expect(actualNames).toEqual(expected);
-    expect(expected).toHaveLength(55);
+    expect(expected).toHaveLength(56);
   });
 });
