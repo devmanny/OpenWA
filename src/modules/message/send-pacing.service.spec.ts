@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker } from './send-pacing.service';
+import { EnginePageError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
@@ -309,6 +310,17 @@ describe('computeSendPacingConfig', () => {
     expect(parsed).toEqual(computeSendPacingConfig({}).warmupSchedule);
   });
 
+  // A container env cannot carry the empty value: the blank-clearing at boot deletes it, and the
+  // default schedule applies instead. `0` and `off` survive that, so they are the portable off switch.
+  it.each(['', '0', 'off', ' OFF '])('disables the cold-reachout rule for %p', raw => {
+    expect(computeSendPacingConfig({ SEND_PACING_COLD_DAILY_CAP: raw }).coldSchedule).toEqual([]);
+  });
+
+  it.each(['0', 'off'])('keeps the warm-up schedule on its default for %p', raw => {
+    const parsed = computeSendPacingConfig({ SEND_PACING_WARMUP_SCHEDULE: raw }).warmupSchedule;
+    expect(parsed).toEqual(computeSendPacingConfig({}).warmupSchedule);
+  });
+
   it.each([
     ['SEND_PACING_BREAKER_THRESHOLD', 'breakerThreshold'],
     ['SEND_PACING_BREAKER_COOLDOWN_MS', 'breakerCooldownMs'],
@@ -375,16 +387,16 @@ describe('send paths consult the governor', () => {
   // This path does NOT go through MessageService, which is exactly why it needs its own call —
   // sending a product is a real outbound chat message, not a catalog read.
   it('CatalogService.sendProduct refuses before the engine is asked', async () => {
-    const engine = { sendProduct: jest.fn(), sendCatalog: jest.fn() };
+    const hookManager = { execute: jest.fn() };
+    const engine = { sendProduct: jest.fn() };
     const pacing = refusing();
-    const service = new CatalogService({ require: () => engine } as never, pacing as never);
+    const service = new CatalogService({ require: () => engine } as never, pacing as never, hookManager as never);
 
     await expect(service.sendProduct('s1', 'c@c.us', 'p1')).rejects.toBeInstanceOf(HttpException);
-    await expect(service.sendCatalog('s1', 'c@c.us')).rejects.toBeInstanceOf(HttpException);
 
-    expect(pacing.assertSendAllowed).toHaveBeenCalledTimes(2);
+    expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us');
+    expect(hookManager.execute).not.toHaveBeenCalled();
     expect(engine.sendProduct).not.toHaveBeenCalled();
-    expect(engine.sendCatalog).not.toHaveBeenCalled();
   });
 
   // Group participant adds reach WhatsApp with no moderation gate of any kind, so the governor is
@@ -631,6 +643,10 @@ describe('countsTowardSendBreaker', () => {
     ['a WhatsApp refusal (403 EngineRefusedError)', new EngineRefusedError('not allowed to send here')],
     ['a raw engine error', new Error('ack error 500')],
     ['a server-side fault', new InternalServerErrorException('boom')],
+    [
+      'a failure WhatsApp Web threw in the page (500 EnginePageError)',
+      new EnginePageError({ name: 'TypeError', message: 'x' }, new Error('page threw {}')),
+    ],
   ])('counts %s', (_label, error) => {
     expect(countsTowardSendBreaker(error)).toBe(true);
   });

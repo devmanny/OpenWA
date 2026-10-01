@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as tar from 'tar-stream';
 import { createGzip } from 'zlib';
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 
 // `archiver` v8 ships as ESM only, which ts-jest cannot parse when StorageService
@@ -12,6 +12,7 @@ import { ConfigService } from '@nestjs/config';
 jest.mock('archiver', () => ({ default: jest.fn() }));
 
 import { StorageService } from './storage.service';
+import * as transfer from './storage-transfer';
 
 /** Build an in-memory gzipped tar archive from the given entries. */
 function makeTarGz(entries: { name: string; data: string }[]): Promise<Buffer> {
@@ -97,11 +98,11 @@ describe('StorageService (local) path traversal protection', () => {
       { name: '../evil.txt', data: 'bad' },
     ]);
 
-    const count = await service.importFromStream(Readable.from(gz));
+    const result = await service.importFromStream(Readable.from(gz));
 
     expect(fs.readFileSync(path.join(localPath, 'safe.txt'), 'utf8')).toBe('good');
     expect(fs.existsSync(path.join(baseDir, 'evil.txt'))).toBe(false);
-    expect(count).toBe(1);
+    expect(result).toEqual({ imported: 1, failed: 1 });
   });
 });
 
@@ -244,8 +245,8 @@ describe('StorageService import resource caps (decompression-bomb defense)', () 
 
   it('imports normally within the (generous default) caps', async () => {
     const gz = await makeTarGz([{ name: 'ok.txt', data: 'fine' }]);
-    const count = await service.importFromStream(Readable.from(gz));
-    expect(count).toBe(1);
+    const result = await service.importFromStream(Readable.from(gz));
+    expect(result).toEqual({ imported: 1, failed: 0 });
   });
 });
 
@@ -343,6 +344,23 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
 
     expect(iterateFiles).toHaveBeenCalled();
     expect(listFiles).not.toHaveBeenCalled();
+  });
+
+  // The export fails on any open error other than a missing object, so a listed key openFile always
+  // refuses (an S3 object at the bare key root, or one with a `..` segment) must not reach it.
+  it('leaves out a listed key that openFile would refuse', async () => {
+    const { service } = makeLocalService();
+    jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
+      yield await Promise.resolve('media/a.bin');
+      yield '';
+      yield 'media/../x.bin';
+    });
+    const create = jest.spyOn(transfer, 'createExportStream').mockResolvedValue(new PassThrough());
+
+    await service.createExportStream();
+
+    expect(await create.mock.calls[0][0]()).toEqual(['media/a.bin']);
+    create.mockRestore();
   });
 
   /**

@@ -24,9 +24,10 @@ import {
 import { toEngineParticipants } from './baileys-groups';
 import { findSelfParticipant } from './baileys-group-mapper';
 import { buildVCard } from './vcard';
-import { resolveBaileysButtonClick, setBaileysText } from './baileys-message-mapper';
+import { baileysChatJid, resolveBaileysButtonClick, setBaileysText, storedKeyInChat } from './baileys-message-mapper';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { type createLogger } from '../../common/services/logger.service';
@@ -309,12 +310,21 @@ export class BaileysMessaging {
 
   /**
    * Publish the account's own GLOBAL presence — the no-jid form of sendPresenceUpdate, which
-   * addresses the whole account rather than a chat. Not best-effort, unlike sendChatState: the
-   * caller asked for a specific visibility, so a failure surfaces instead of leaving the account
-   * silently online (#871). Resets on reconnect per the socket's markOnlineOnConnect option.
+   * addresses the whole account rather than a chat (`<presence>`, not a per-chat `<chatstate>`).
+   * Not best-effort, unlike sendChatState: the caller asked for a specific visibility, so a
+   * failure surfaces instead of leaving the account silently online (#871).
+   *
+   * Baileys resolves this call without sending anything when `creds.me.name` is unset (it logs
+   * "no name present, ignoring presence update request" and returns). `sock.user` is that cred.
+   * Refusing here keeps PUT /presence from reporting success for an update that never left.
    */
   async setOnlinePresence(available: boolean): Promise<void> {
     this.host.ensureReady();
+    if (!this.sock().user?.name) {
+      throw new EngineNotReadyError(
+        'The account push name is not available yet, so this presence update would be ignored. Retry once the session has synced its profile name.',
+      );
+    }
     await this.sock().sendPresenceUpdate(available ? 'available' : 'unavailable');
   }
 
@@ -572,9 +582,11 @@ export class BaileysMessaging {
     // Whichever branch runs, the text leaves this account's view, so it must not stay the chat
     // preview. The echo of an own revoke is skipped as an own send, so the inbound path never clears it.
     const chatJid = target.key.remoteJid ?? chatId;
+    // The preview of a received broadcast-list message is kept in its sender's chat.
+    const previewJid = baileysChatJid(chatJid, target.key.participant, target.key.fromMe === true);
     if (forEveryone && (target.key.fromMe === true || (await this.selfIsGroupAdmin(target.key.remoteJid)) !== false)) {
       await this.send(await this.toDeliverableJid(chatId), { delete: target.key });
-      this.host.recordMessageEdit(chatJid, messageId, '');
+      this.host.recordMessageEdit(previewJid, messageId, '');
       // The echo of this delete is skipped as an own send, so the stored copy is emptied here, as
       // processInboundMessage does for a delete made from the phone or by the other side. Recorded
       // first, so the message stays deleted even if the store write fails or a repeat delivery of the
@@ -600,7 +612,7 @@ export class BaileysMessaging {
       ),
       'the delete-for-me',
     );
-    this.host.recordMessageEdit(chatJid, messageId, '');
+    this.host.recordMessageEdit(previewJid, messageId, '');
   }
 
   /**
@@ -868,10 +880,11 @@ export class BaileysMessaging {
    * The stored key must belong to the requested chat — acting with another chat's key is a
    * not-found here, not a cross-chat write (a pin sent into chat A referencing chat B's message, or
    * a star indexed under the wrong conversation, would report success). Both sides are neutralized
-   * so @c.us/@s.whatsapp.net (and a known lid<->pn twin) compare equal.
+   * so @c.us/@s.whatsapp.net (and a known lid<->pn twin) compare equal, and a received broadcast-list
+   * message is found under the sender chat it is reported in.
    */
   private assertStoredInChat(target: WAMessage, chatId: string, messageId: string): void {
-    if (this.host.toNeutralJid(target.key.remoteJid ?? '') !== this.host.toNeutralJid(chatId)) {
+    if (!storedKeyInChat(target.key, chatId, jid => this.host.toNeutralJid(jid))) {
       throw new MessageNotFoundError(messageId, chatId);
     }
   }
